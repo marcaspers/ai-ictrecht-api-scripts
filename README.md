@@ -35,8 +35,19 @@ resp = client.chat([{"role": "user", "content": "Hoi"}], model="...")
 print(resp["choices"][0]["message"]["content"])
 ```
 
+## Logging
+
+Elke API-call wordt gelogd in `logs/api-YYYY-MM-DD.jsonl` (één JSON-regel per call) met
+tijdstip, methode, URL, status, duur, request-payload en de volledige response-payload.
+Bij `--stream` worden alle ontvangen stream-events opgeslagen. Wachtwoorden worden gemaskeerd.
+
+- Andere map: `ICTRECHT_API_LOG_DIR=pad/naar/map` in `.env`, of `Client(log_dir="...")`
+- Uitzetten: `ICTRECHT_API_LOG_DIR=` (leeg), of `Client(log_dir="")`
+- Bekijken: `tail -n 1 logs/api-*.jsonl | python -m json.tool`
+
 ## Structuur
 
 - `ictrecht_api/client.py` – `Client` met een methode per endpoint, plus `request()` voor de rest
 - `play.py` – CLI om snel dingen te proberen
 - `.env` – je token (staat in `.gitignore`)
+- `logs/` – API-logs (staat in `.gitignore`)
