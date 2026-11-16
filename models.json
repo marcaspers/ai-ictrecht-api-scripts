@@ -1,0 +1,257 @@
+{
+  "updated": "2026-11-12T17:21:37+01:00",
+  "models": [
+    {
+      "nr": 0,
+      "id": "gpt-5",
+      "name": "ChatGPT",
+      "available": true
+    },
+    {
+      "nr": 1,
+      "id": "ai-act-guide-door-ictrecht",
+      "name": "AI Act Guide",
+      "available": true
+    },
+    {
+      "nr": 2,
+      "id": "algemene-voorwaarden-checker-door-ictrecht",
+      "name": "Algemene Voorwaarden Checker",
+      "available": true
+    },
+    {
+      "nr": 3,
+      "id": "assurancerapport-assistent-door-ictrecht",
+      "name": "Assurancerapport Assistent",
+      "available": true
+    },
+    {
+      "nr": 4,
+      "id": "audit-voorbereiding-assistent-door-ictrecht",
+      "name": "Audit Voorbereiding Assistent",
+      "available": true
+    },
+    {
+      "nr": 5,
+      "id": "beleids-assistent-door-ictrecht",
+      "name": "Beleids Assistent",
+      "available": true
+    },
+    {
+      "nr": 6,
+      "id": "beoordelingsassistent-datalekken-door-ictrecht",
+      "name": "Beoordelingsassistent Datalekken",
+      "available": true
+    },
+    {
+      "nr": 7,
+      "id": "contextanalyse-assistent-door-ictrecht",
+      "name": "Context & Stakeholderanalyse Assistent",
+      "available": true
+    },
+    {
+      "nr": 8,
+      "id": "contract-guide-door-ictrecht",
+      "name": "Contract Guide",
+      "available": true
+    },
+    {
+      "nr": 9,
+      "id": "contractclausule-assistent-door-ictrecht",
+      "name": "Contractclausule Assistent",
+      "available": true
+    },
+    {
+      "nr": 10,
+      "id": "cookieassistent-avgtw-door-ictrecht",
+      "name": "Cookieassistent AVG/Tw",
+      "available": true
+    },
+    {
+      "nr": 11,
+      "id": "data-act-guide-door-ictrecht",
+      "name": "Data Act Guide",
+      "available": true
+    },
+    {
+      "nr": 12,
+      "id": "doorgifte-assistent-avg-door-ictrecht",
+      "name": "Doorgifte Assistent AVG",
+      "available": true
+    },
+    {
+      "nr": 13,
+      "id": "dpia-assistent-door-ictrecht-",
+      "name": "DPIA Assistent",
+      "available": true
+    },
+    {
+      "nr": 14,
+      "id": "gegevensverwerking-assistent-door-ictrecht",
+      "name": "Gegevensverwerking Assistent",
+      "available": true
+    },
+    {
+      "nr": 15,
+      "id": "governance-assistent-door-ictrecht",
+      "name": "Governance Assistent",
+      "available": true
+    },
+    {
+      "nr": 16,
+      "id": "ie-recht-guide-door-ictrecht",
+      "name": "IE Recht Guide",
+      "available": true
+    },
+    {
+      "nr": 17,
+      "id": "leverancierscontrole-assistent-door-ictrecht",
+      "name": "Leverancierscontrole Assistent",
+      "available": true
+    },
+    {
+      "nr": 18,
+      "id": "nda-checker-door-ictrecht",
+      "name": "NDA Checker",
+      "available": true
+    },
+    {
+      "nr": 19,
+      "id": "privacy-guide-claude-v01",
+      "name": "Privacy Guide",
+      "available": true
+    },
+    {
+      "nr": 20,
+      "id": "risico-assistent-door-ictrecht",
+      "name": "Bedrijfsmiddelen & Risico Assistent",
+      "available": true
+    },
+    {
+      "nr": 21,
+      "id": "vso-checker-door-ictrecht",
+      "name": "VSO Checker",
+      "available": true
+    },
+    {
+      "nr": 22,
+      "id": "wpg-guide-door-ictrecht",
+      "name": "WPG Guide",
+      "available": true
+    },
+    {
+      "nr": 23,
+      "id": "zorgrecht-guide-door-ictrecht",
+      "name": "Zorgrecht Guide",
+      "available": true
+    },
+    {
+      "nr": 24,
+      "id": "rechten-van-betrokkenen-assistent",
+      "name": "AVG rechten van betrokkenen assistent",
+      "available": true
+    },
+    {
+      "nr": 25,
+      "id": "arbeidsovereenkomsten-checker-door-ictrecht",
+      "name": "Arbeidsovereenkomsten Checker",
+      "available": true
+    },
+    {
+      "nr": 26,
+      "id": "ontslag-assistent-door-ictrecht",
+      "name": "Ontslag Assistent",
+      "available": true
+    },
+    {
+      "nr": 27,
+      "id": "wet-dba-guide-door-ictrecht",
+      "name": "Wet DBA Guide",
+      "available": true
+    },
+    {
+      "nr": 28,
+      "id": "bedrock/claude-sonnet-4-6",
+      "name": "Claude",
+      "available": true
+    },
+    {
+      "nr": 29,
+      "id": "cbw-nis2-guide",
+      "name": "CBW (NIS2) Guide",
+      "available": true
+    },
+    {
+      "nr": 30,
+      "id": "dora-guide-door-ictrecht",
+      "name": "DORA guide",
+      "available": true
+    },
+    {
+      "nr": 31,
+      "id": "mistral-large-3",
+      "name": "Mistral",
+      "available": true
+    },
+    {
+      "nr": 32,
+      "id": "processen-assistent",
+      "name": "Processen Assistent",
+      "available": true
+    },
+    {
+      "nr": 33,
+      "id": "cra-guide",
+      "name": "CRA Guide",
+      "available": true
+    },
+    {
+      "nr": 34,
+      "id": "aanbestedingsrecht-guide",
+      "name": "Aanbestedingsrecht Guide",
+      "available": true
+    },
+    {
+      "nr": 35,
+      "id": "avg-rolverdeling-assistent",
+      "name": "AVG-rolverdeling Assistent",
+      "available": true
+    },
+    {
+      "nr": 36,
+      "id": "patintenrechten-assistent",
+      "name": "Patiëntenrechten Assistent",
+      "available": true
+    },
+    {
+      "nr": 37,
+      "id": "ondernemingsrecht-basis",
+      "name": "Ondernemingsrecht Guide (basis)",
+      "available": true
+    },
+    {
+      "nr": 38,
+      "id": "woo-guide",
+      "name": "Woo Guide",
+      "available": true
+    },
+    {
+      "nr": 39,
+      "id": "woo-document-beoordelingsassistent",
+      "name": "Woo document beoordelingsassistent",
+      "available": true
+    },
+    {
+      "nr": 40,
+      "id": "onderwijsassistent",
+      "name": "IBP Onderwijs Guide",
+      "available": true
+    },
+    {
+      "nr": 41,
+      "id": "bestuursrecht-guide",
+      "name": "Bestuursrecht Guide",
+      "available": true
+    }
+  ]
+}

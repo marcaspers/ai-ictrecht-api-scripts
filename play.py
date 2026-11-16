@@ -7,6 +7,7 @@ Voorbeelden:
     python play.py functions
     python play.py chat "Wat is een verwerkersovereenkomst?"
     python play.py chat "Leg de AI Act uit" --model <model-id> --stream
+    python play.py chat "Leg de AI Act uit" -m 1      # nummer uit models.json
     python play.py chat --interactive
     python play.py raw GET models
     python play.py raw POST chat/completions '{"messages":[{"role":"user","content":"Hoi"}]}'
@@ -38,7 +39,14 @@ def print_table(items, fields, args):
 
 
 def cmd_models(client, args):
-    print_table(client.models(), ["id", "name"], args)
+    data = client.models()
+    if args.json or not client.models_file:
+        print_table(data, ["id", "name"], args)
+        return
+    entries = [e for e in client._load_models_file() if e.get("available", True)]
+    for e in entries:
+        print(f"{e['nr']:>3}  {e['id']}  {e['name']}")
+    print(f"\n{len(entries)} modellen, overzicht bijgewerkt in {client.models_file}", file=sys.stderr)
 
 
 def cmd_prompts(client, args):
@@ -133,7 +141,7 @@ def main():
 
     p = sub.add_parser("chat", help="Chat completion")
     p.add_argument("message", nargs="?")
-    p.add_argument("--model", "-m", help="Model-id (zie: python play.py models)")
+    p.add_argument("--model", "-m", help="Model-id of nummer uit models.json (zie: python play.py models)")
     p.add_argument("--system", "-s", help="Systeemprompt")
     p.add_argument("--temperature", "-t", type=float)
     p.add_argument("--stream", action="store_true", help="Antwoord streamen")
@@ -153,6 +161,8 @@ def main():
         args.func(client, args)
     except ApiError as e:
         sys.exit(f"API-fout: {e}")
+    except ValueError as e:
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":
