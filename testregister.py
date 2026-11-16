@@ -4,6 +4,8 @@
     python testregister.py info       register.xlsx [--model IE]
     python testregister.py koppel     register.xlsx [--ververs] [--model IE]
     python testregister.py run        register.xlsx --model IE --versie v1.0 [opties]
+    python testregister.py beoordeel  register.xlsx --model IE --versie v1.0 [opties]
+    python testregister.py kalibratie register.xlsx --model IE --versie v1.0
 
 Elk schrijvend commando maakt een nieuw bestand (Testregister_AI-modellen_ICTRecht_<jjjjmmdd>.xlsx,
 met _2, _3 … als dat al bestaat) of schrijft naar --uit. Het invoerbestand blijft ongewijzigd.
@@ -21,6 +23,8 @@ from register.validatie import valideer
 from register.werkmap import Register, RegisterFout, tekst
 from register.xlsxpatch import PatchFout
 from testrunner import koppeling as kp
+from testrunner.beoordelen import BeoordeelOpties, beoordeel
+from testrunner.kalibratie import kalibreer
 from testrunner.uitvoeren import MAX_PARALLEL, Omgeving, RunOpties, UitvoerFout, voer_uit
 
 
@@ -118,10 +122,27 @@ def cmd_run(args) -> int:
                        parallel=args.parallel, hervat=args.hervat, uit=args.uit,
                        niet_interactief=args.niet_interactief)
     client = Client(max_retries=3)
-    res = voer_uit(args.register, opties, client,
-                   Omgeving(output_dir=Path(args.output), koppeling_pad=Path(args.koppeling),
-                            models_pad=Path(args.models)))
+    res = voer_uit(args.register, opties, client, _omgeving(args))
     return 1 if (res.fouten or res.afgebroken) else 0
+
+
+# --- beoordeel en kalibratie ----------------------------------------------------
+
+def _omgeving(args) -> Omgeving:
+    return Omgeving(output_dir=Path(args.output), koppeling_pad=Path(args.koppeling), models_pad=Path(args.models))
+
+
+def cmd_beoordeel(args) -> int:
+    opties = BeoordeelOpties(model=args.model, versie=args.versie, run=args.run or [], opnieuw=args.opnieuw,
+                             dry_run=args.dry_run, schrijf_in_register=args.schrijf_in_register,
+                             beoordelaar_model=args.beoordelaar_model, uit=args.uit)
+    res = beoordeel(args.register, opties, Client(max_retries=3), _omgeving(args))
+    return 1 if res.fouten else 0
+
+
+def cmd_kalibratie(args) -> int:
+    kalibreer(args.register, args.model, args.versie, _omgeving(args))
+    return 0
 
 
 # --- main --------------------------------------------------------------------
@@ -168,6 +189,26 @@ def bouw_parser() -> argparse.ArgumentParser:
     p.add_argument("--uit", help="Pad voor het nieuwe register")
     p.add_argument("--output", default="output", help="Map voor auditbestanden (standaard output/)")
     p.set_defaults(func=cmd_run)
+
+    p = basis("beoordeel", "Testruns laten scoren door een LLM-beoordelaar")
+    p.add_argument("--model", required=True, help="Model-ID, bijv. IE")
+    p.add_argument("--versie", required=True, help="Modelversie zoals in Modellen")
+    p.add_argument("--run", action="append", metavar="RUN-ID",
+                   help="Alleen deze run (herhaalbaar); mag ook al door een jurist gescoord zijn")
+    p.add_argument("--opnieuw", action="store_true", help="Opnieuw beoordelen (alleen met --run)")
+    p.add_argument("--beoordelaar-model", help="OpenWebUI-model (standaard ICTRECHT_JUDGE_MODEL uit .env)")
+    p.add_argument("--schrijf-in-register", action="store_true",
+                   help="Scores ook in lege scorevelden van het register zetten (nieuw bestand)")
+    p.add_argument("--dry-run", action="store_true", help="Alleen tonen welke runs beoordeeld zouden worden")
+    p.add_argument("--uit", help="Pad voor het nieuwe register (met --schrijf-in-register)")
+    p.add_argument("--output", default="output", help="Map voor runs en beoordelingen (standaard output/)")
+    p.set_defaults(func=cmd_beoordeel)
+
+    p = basis("kalibratie", "LLM-oordelen vergelijken met de scores van de jurist")
+    p.add_argument("--model", required=True, help="Model-ID, bijv. IE")
+    p.add_argument("--versie", required=True, help="Modelversie zoals in Modellen")
+    p.add_argument("--output", default="output", help="Map met beoordelingen; hier komt ook de CSV")
+    p.set_defaults(func=cmd_kalibratie)
     return parser
 
 
