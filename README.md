@@ -7,7 +7,7 @@ Python-scripts om te experimenteren met https://proxy.ai.ictrecht.nl/docs.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt       # of requirements-dev.txt voor de tests (pytest)
 cp .env.example .env   # en vul ICTRECHT_API_TOKEN in
 ```
 
@@ -56,9 +56,71 @@ Bij `--stream` worden alle ontvangen stream-events opgeslagen. Wachtwoorden word
 - Uitzetten: `ICTRECHT_API_LOG_DIR=` (leeg), of `Client(log_dir="")`
 - Bekijken: `tail -n 1 logs/api-*.jsonl | python -m json.tool`
 
+## Testregister-runner (`testregister.py`)
+
+Draait de testcases uit het testregister (Excel) via de API, schrijft de antwoorden als testruns
+in een **nieuwe versie** van het register en laat ze scoren door een LLM-beoordelaar.
+
+```bash
+python testregister.py info       register.xlsx [--model IE]                # overzicht + validatie
+python testregister.py koppel     register.xlsx [--ververs]                 # Model-ID ↔ OpenWebUI-id
+python testregister.py run        register.xlsx --model IE --versie v1.0 --dry-run
+python testregister.py run        register.xlsx --model IE --versie v1.0 --alleen-regressie --herhalingen 3
+python testregister.py beoordeel  register.xlsx --model IE --versie v1.0 [--schrijf-in-register]
+python testregister.py kalibratie register.xlsx --model IE --versie v1.0
+```
+
+Elk schrijvend commando maakt `Testregister_AI-modellen_ICTRecht_<jjjjmmdd>.xlsx` naast het
+invoerbestand (`_2`, `_3`, … als dat al bestaat), of het pad uit `--uit`. Het invoerbestand
+wordt nooit aangepast.
+
+**run** – selecteert de cases van één model (`--tc`, `--type`, `--alleen-regressie`), volgt
+Overzicht!B7 voor goedgekeurd/concept (overschrijven met `--ook-concept` / `--alleen-goedgekeurd`),
+slaat *vervallen* en bijlagen over, controleert vooraf de vrije regels in Testruns en vraagt om
+bevestiging (`--ja` om dat over te slaan). Elke prompt gaat in een nieuw gesprek zonder eigen
+systeemprompt of temperatuur. Opties: `--herhalingen`, `--parallel` (max 4), `--uitvoerder`,
+`--hervat` (cases overslaan die vandaag al voor die versie zijn gedraaid).
+
+**beoordeel** – scoort runs zonder scores volgens [beoordeling/rubric.md](beoordeling/rubric.md)
+met het model uit `--beoordelaar-model` of `ICTRECHT_JUDGE_MODEL`. Standaard alleen naar
+`output/beoordelingen/<Run-ID>.json`; het register blijft voor de jurist. Met `--run RUN-…` kan
+ook een run die de jurist al scoorde worden beoordeeld (voor kalibratie); `--opnieuw` beoordeelt
+opnieuw en bewaart het vorige oordeel.
+
+**kalibratie** – vergelijkt LLM-oordelen met de scores van de jurist (Type beoordelaar = mens):
+% gelijk eindoordeel (doel ≥ 80%), gemiste K.O.'s (doel 0), verschil per dimensie en de runs met
+een afwijkend eindoordeel. Ook als CSV in `output/`.
+
+Bestanden:
+
+- `modelkoppeling.json` (in git) – bevestigde koppelingen Model-ID → OpenWebUI-id. Wordt bij elke
+  run tegen de actuele modellenlijst gecontroleerd; bij twijfel vraagt het script (of stopt met
+  `--niet-interactief`).
+- `output/runs/<Run-ID>.json` – auditspoor per run: verzonden payload, volledige respons (incl.
+  bronnen), starttijd en duur. Lange antwoorden worden in Excel afgekapt op 32.000 tekens; het
+  volledige antwoord staat hier.
+- `output/beoordelingen/<Run-ID>.json` – oordeel van de beoordelaar plus de ruwe uitvoer.
+
+Instellingen in `.env`: `ICTRECHT_TESTER` (Uitgevoerd door), `ICTRECHT_JUDGE_MODEL`,
+`ICTRECHT_API_TIMEOUT` (standaard 300 s). API-calls worden bij time-outs, 429 en 5xx tot 3× herhaald.
+
+**Waarom niet gewoon openpyxl voor het schrijven?** openpyxl verwijdert bij opslaan de
+keuzelijsten van het register (Excel bewaart keuzelijsten die naar een ander tabblad verwijzen
+als extensie die openpyxl niet kent). Het script leest daarom met openpyxl, maar schrijft door
+alleen de betreffende cellen in de XML van het tabblad Testruns aan te passen
+(`register/xlsxpatch.py`). Alle andere onderdelen blijven byte voor byte gelijk. Excel
+herberekent de formules bij het openen (`fullCalcOnLoad`).
+
+Tests (zonder netwerk): `python -m pytest`
+
 ## Structuur
 
 - `ictrecht_api/client.py` – `Client` met een methode per endpoint, plus `request()` voor de rest
 - `play.py` – CLI om snel dingen te proberen
+- `testregister.py` – CLI voor de testregister-runner
+- `register/` – register lezen (op kopnaam), validatie, Run-ID's, eindoordeel, schrijven via XML-patch
+- `testrunner/` – modelkoppeling, uitvoeren, beoordelen, kalibratie
+- `beoordeling/rubric.md` – scoresysteem; bron voor de beoordelaarsprompt
+- `tests/` – pytest; `tests/fixtures/` bevat een kopie van het IE-voorbeeldregister
 - `.env` – je token (staat in `.gitignore`)
-- `logs/` – API-logs (staat in `.gitignore`)
+- `logs/`, `output/` – API-logs en testrunner-uitvoer (staan in `.gitignore`)
