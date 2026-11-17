@@ -1,7 +1,8 @@
-"""Het testregister lezen (openpyxl) en testruns schrijven (via xlsxpatch).
+"""Het Excel-testregister lezen (openpyxl), voor import en als sjabloon voor de export.
 
 Kolommen worden altijd op kopnaam in rij 1 gezocht. Berekende waarden worden nooit
-uit het bestand gelezen; wat nodig is rekent het script zelf uit.
+uit het bestand gelezen; wat nodig is rekent het script zelf uit. Schrijven gebeurt
+uitsluitend via xlsxpatch (zie register/exporteren.py).
 """
 
 from __future__ import annotations
@@ -12,9 +13,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
-
-from .xlsxpatch import patch_werkmap
 
 TABBLADEN = ["Instructie", "Modellen", "Testcases", "Testruns", "Overzicht", "Regressie", "Lijsten"]
 
@@ -30,10 +28,6 @@ KOPPEN = {
                  "Type beoordelaar", "Status testcase"],
 }
 DIMENSIES = ["Juistheid", "Volledigheid", "Bronnen", "Bruikbaarheid", "Gedrag"]
-# Invoerkolommen van Testruns: alleen hierin schrijft het script.
-TESTRUNS_INVOER = {"Run-ID", "TC-ID", "Modelversie", "Datum", "Uitgevoerd door", "Uitvoerwijze", "Herhaling #",
-                   "Antwoord model", *DIMENSIES, "K.O.", "K.O.-code", "Toelichting", "Beoordelaar",
-                   "Type beoordelaar"}
 INSTELLING_ALLEEN_GOEDGEKEURD = ("Overzicht", "B7")
 STANDAARD_UITVOERNAAM = "Testregister_AI-modellen_ICTRecht_{datum:%Y%m%d}.xlsx"
 
@@ -61,9 +55,9 @@ class ModelRegel:
     model_id: str
     naam: str
     versie: str
-    versie_waarde: object  # ruwe celwaarde, zodat we die exact zo terugschrijven
     status: str
     opmerkingen: str
+    waarden: dict = field(default_factory=dict)  # alle kolommen op kopnaam
 
 
 @dataclass
@@ -75,10 +69,10 @@ class Register:
     testruns: list[dict] = field(default_factory=list)
     runs_grens: int = 0       # laatste regel van Testruns met een Eindoordeel-formule
     tc_grens: int = 0         # laatste regel van Testcases met een Regressie-nr-formule
+    modellen_grens: int = 0   # laatste regel van Modellen (met opmaak)
     vrije_rijen: list[int] = field(default_factory=list)
     alleen_goedgekeurd: str = ""   # inhoud van Overzicht!B7
     structuurfouten: list[str] = field(default_factory=list)
-    _wijzigingen: dict[tuple[int, str], object] = field(default_factory=dict)
 
     # --- laden ------------------------------------------------------------
 
@@ -120,19 +114,20 @@ class Register:
             yield rij, {kop: ws.cell(rij, c).value for kop, c in kol.items()}
 
     def _lees_modellen(self, ws) -> None:
+        self.modellen_grens = ws.max_row
         for rij, w in self._rijen(ws, "Modellen"):
             if not tekst(w["Model-ID"]):
                 continue
             self.modellen.append(ModelRegel(rij=rij, model_id=tekst(w["Model-ID"]),
                                             naam=tekst(w["Modelnaam (OpenWebUI)"]), versie=tekst(w["Modelversie"]),
-                                            versie_waarde=w["Modelversie"], status=tekst(w["Status"]),
-                                            opmerkingen=tekst(w["Opmerkingen"])))
+                                            status=tekst(w["Status"]), opmerkingen=tekst(w["Opmerkingen"]),
+                                            waarden=w))
 
     def _lees_testcases(self, ws) -> None:
         kol = self.kolommen["Testcases"]["Regressie-nr"]
         self.tc_grens = max((r for r in range(2, ws.max_row + 1) if is_formule(ws.cell(r, kol).value)), default=1)
         for rij, w in self._rijen(ws, "Testcases"):
-            if tekst(w["TC-ID"]):
+            if tekst(w["TC-ID"]) or tekst(w["Prompt"]):  # ook nieuwe cases zonder TC-ID (import nummert)
                 w["rij"] = rij
                 self.testcases.append(w)
 
@@ -166,26 +161,6 @@ class Register:
     def model_van_run(self, run: dict) -> str:
         tc = self.testcase(tekst(run["TC-ID"]))
         return tekst(tc["Model-ID"]) if tc else ""
-
-    # --- schrijven ----------------------------------------------------------
-
-    def zet(self, rij: int, kop: str, waarde) -> None:
-        """Noteer een waarde voor een invoercel van Testruns (wordt pas bij opslaan geschreven)."""
-        if kop not in TESTRUNS_INVOER:
-            raise RegisterFout(f"'{kop}' is geen invoerkolom van Testruns")
-        if not 2 <= rij <= self.runs_grens:
-            raise RegisterFout(f"Regel {rij} valt buiten het bereik 2–{self.runs_grens} van Testruns")
-        self._wijzigingen[(rij, kop)] = waarde
-
-    @property
-    def aantal_wijzigingen(self) -> int:
-        return len(self._wijzigingen)
-
-    def opslaan(self, uit: str | Path | None = None, datum: dt.date | None = None) -> Path:
-        doel = Path(uit) if uit else volgende_uitvoerpad(self.pad.parent, datum or dt.date.today())
-        kol = self.kolommen["Testruns"]
-        cellen = {f"{get_column_letter(kol[kop])}{rij}": w for (rij, kop), w in self._wijzigingen.items()}
-        return patch_werkmap(self.pad, doel, {"Testruns": cellen})
 
 
 def volgende_uitvoerpad(map_: Path, datum: dt.date) -> Path:
