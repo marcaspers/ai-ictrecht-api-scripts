@@ -1,0 +1,77 @@
+# Testregister: PostgreSQL + beheerscherm (gui) + command line (cli).
+#
+#   docker compose up -d                                   # database en beheerscherm (http://localhost:8501)
+#   docker compose run --rm cli import "data/Testregister….xlsx"
+#   docker compose run --rm cli run --model IE --dry-run
+#   docker compose run --rm cli export --model IE          # → data/
+#   docker compose run --rm play models                    # speeltuin (play.py)
+#
+# Bestanden voor import/export staan in ./data (gekoppeld aan /app/data in de container).
+# Instellingen en geheimen komen uit .env (zie .env.example); die zitten nooit in de image.
+
+x-app: &app
+  build: .
+  image: ictrecht-testregister:latest
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgresql+psycopg://testregister:${POSTGRES_PASSWORD:-testregister}@db:5432/testregister
+  volumes:
+    - ./data:/app/data
+    - ./output:/app/output
+    - ./logs:/app/logs
+    - ./models.json:/app/models.json
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: testregister
+      POSTGRES_USER: testregister
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-testregister}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Alleen lokaal bereikbaar; zo kan de CLI buiten Docker ook verbinden (DATABASE_URL in .env).
+      - "127.0.0.1:${DB_POORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testregister -d testregister"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  gui:
+    <<: *app
+    restart: unless-stopped
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        python testregister.py db init &&
+        exec streamlit run gui/app.py --server.address=0.0.0.0 --server.port=8501
+        --server.headless=true --browser.gatherUsageStats=false
+    ports:
+      # Standaard alleen lokaal. Centraal: zet GUI_ADRES=0.0.0.0, een GUI_WACHTWOORD en liefst een reverse proxy met TLS.
+      - "${GUI_ADRES:-127.0.0.1}:${GUI_POORT:-8501}:8501"
+
+  cli:
+    <<: *app
+    profiles: ["cli"]
+    stdin_open: true
+    tty: true
+
+  play:
+    <<: *app
+    profiles: ["cli"]
+    entrypoint: ["python", "play.py"]
+    command: ["--help"]
+    depends_on: []
+    stdin_open: true
+    tty: true
+
+volumes:
+  pgdata:

@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
@@ -15,6 +16,7 @@ load_dotenv()
 DEFAULT_BASE_URL = "https://proxy.ai.ictrecht.nl/api"
 DEFAULT_LOG_DIR = "logs"
 DEFAULT_MODELS_FILE = "models.json"
+DEFAULT_TIMEOUT = 300  # seconden; overschrijfbaar met ICTRECHT_API_TIMEOUT
 REDACTED_FIELDS = {"password"}
 
 
@@ -29,10 +31,15 @@ class ApiError(RuntimeError):
 
 
 class Client:
-    def __init__(self, token: str | None = None, base_url: str | None = None, timeout: float = 120,
-                 log_dir: str | None = None, models_file: str | None = None):
+    def __init__(self, token: str | None = None, base_url: str | None = None, timeout: float | None = None,
+                 log_dir: str | None = None, models_file: str | None = None, max_retries: int = 0,
+                 backoff: float = 2.0, sleep=time.sleep):
         self.base_url = (base_url or os.getenv("ICTRECHT_API_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else float(os.getenv("ICTRECHT_API_TIMEOUT") or DEFAULT_TIMEOUT)
+        # Herhaalpogingen bij time-outs, verbindingsfouten, 429 en 5xx (niet bij andere 4xx).
+        self.max_retries = max_retries
+        self.backoff = backoff
+        self._sleep = sleep
         # Lege string (ICTRECHT_API_LOG_DIR=) schakelt logging uit.
         log_dir = log_dir if log_dir is not None else os.getenv("ICTRECHT_API_LOG_DIR", DEFAULT_LOG_DIR)
         self.log_dir = Path(log_dir) if log_dir else None
@@ -77,15 +84,41 @@ class Client:
 
     # --- low level -------------------------------------------------------
 
+    def _wachttijd(self, poging: int, response: requests.Response | None = None) -> float:
+        if response is not None:
+            try:
+                return max(0.0, float(response.headers.get("Retry-After", "")))
+            except ValueError:
+                pass
+        return self.backoff * (2 ** poging)
+
     def request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = f"{self.base_url}/{path.lstrip('/')}"
-        response = self.session.request(method, url, timeout=self.timeout, **kwargs)
-        # Streams worden gelogd door de aanroeper zodra de stream klaar is.
-        if not kwargs.get("stream") or not response.ok:
-            self._log(response, request_payload=kwargs.get("json"))
-        if not response.ok:
+        poging = 0
+        while True:
+            try:
+                response = self.session.request(method, url, timeout=self.timeout, **kwargs)
+            except (requests.Timeout, requests.ConnectionError) as e:
+                if poging >= self.max_retries:
+                    raise
+                wacht = self._wachttijd(poging)
+                print(f"{type(e).__name__} bij {method} {path}; nieuwe poging over {wacht:.0f} s", file=sys.stderr)
+                self._sleep(wacht)
+                poging += 1
+                continue
+            # Streams worden gelogd door de aanroeper zodra de stream klaar is.
+            if not kwargs.get("stream") or not response.ok:
+                self._log(response, request_payload=kwargs.get("json"))
+            if response.ok:
+                return response
+            if (response.status_code == 429 or response.status_code >= 500) and poging < self.max_retries:
+                wacht = self._wachttijd(poging, response)
+                print(f"HTTP {response.status_code} bij {method} {path}; nieuwe poging over {wacht:.0f} s",
+                      file=sys.stderr)
+                self._sleep(wacht)
+                poging += 1
+                continue
             raise ApiError(response)
-        return response
 
     def get(self, path: str, **kwargs):
         return self.request("GET", path, **kwargs).json()

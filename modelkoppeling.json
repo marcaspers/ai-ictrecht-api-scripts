@@ -1,0 +1,254 @@
+{
+  "AANBEST": {
+    "id": "aanbestedingsrecht-guide",
+    "name": "Aanbestedingsrecht Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "AIACT": {
+    "id": "ai-act-guide-door-ictrecht",
+    "name": "AI Act Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "AOK": {
+    "id": "arbeidsovereenkomsten-checker-door-ictrecht",
+    "name": "Arbeidsovereenkomsten Checker",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "ASSUR": {
+    "id": "assurancerapport-assistent-door-ictrecht",
+    "name": "Assurancerapport Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "AUDIT": {
+    "id": "audit-voorbereiding-assistent-door-ictrecht",
+    "name": "Audit Voorbereiding Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "AV": {
+    "id": "algemene-voorwaarden-checker-door-ictrecht",
+    "name": "Algemene Voorwaarden Checker",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "AVG": {
+    "id": "privacy-guide-claude-v01",
+    "name": "Privacy Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "BELEID": {
+    "id": "beleids-assistent-door-ictrecht",
+    "name": "Beleids Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "BESTUUR": {
+    "id": "bestuursrecht-guide",
+    "name": "Bestuursrecht Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "CLAUDE": {
+    "id": "bedrock/claude-sonnet-4-6",
+    "name": "Claude",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "CLAUSULE": {
+    "id": "contractclausule-assistent-door-ictrecht",
+    "name": "Contractclausule Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "CONTEXT": {
+    "id": "contextanalyse-assistent-door-ictrecht",
+    "name": "Context & Stakeholderanalyse Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "CONTRACT": {
+    "id": "contract-guide-door-ictrecht",
+    "name": "Contract Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "COOKIE": {
+    "id": "cookieassistent-avgtw-door-ictrecht",
+    "name": "Cookieassistent AVG/Tw",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "CRA": {
+    "id": "cra-guide",
+    "name": "CRA Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "DATAACT": {
+    "id": "data-act-guide-door-ictrecht",
+    "name": "Data Act Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "DATALEK": {
+    "id": "beoordelingsassistent-datalekken-door-ictrecht",
+    "name": "Beoordelingsassistent Datalekken",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "DBA": {
+    "id": "wet-dba-guide-door-ictrecht",
+    "name": "Wet DBA Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "DOORGIFTE": {
+    "id": "doorgifte-assistent-avg-door-ictrecht",
+    "name": "Doorgifte Assistent AVG",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "DORA": {
+    "id": "dora-guide-door-ictrecht",
+    "name": "DORA guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "DPIA": {
+    "id": "dpia-assistent-door-ictrecht-",
+    "name": "DPIA Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "GEGVERW": {
+    "id": "gegevensverwerking-assistent-door-ictrecht",
+    "name": "Gegevensverwerking Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "GOV": {
+    "id": "governance-assistent-door-ictrecht",
+    "name": "Governance Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "GPT": {
+    "id": "gpt-5",
+    "name": "ChatGPT",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "IBPO": {
+    "id": "onderwijsassistent",
+    "name": "IBP Onderwijs Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "IE": {
+    "id": "ie-recht-guide-door-ictrecht",
+    "name": "IE Recht Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "LEVCTRL": {
+    "id": "leverancierscontrole-assistent-door-ictrecht",
+    "name": "Leverancierscontrole Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "MISTRAL": {
+    "id": "mistral-large-3",
+    "name": "Mistral",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "NDA": {
+    "id": "nda-checker-door-ictrecht",
+    "name": "NDA Checker",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "NIS2": {
+    "id": "cbw-nis2-guide",
+    "name": "CBW (NIS2) Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "ONDR": {
+    "id": "ondernemingsrecht-basis",
+    "name": "Ondernemingsrecht Guide (basis)",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "ONTSLAG": {
+    "id": "ontslag-assistent-door-ictrecht",
+    "name": "Ontslag Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "PATIENT": {
+    "id": "patintenrechten-assistent",
+    "name": "Patiëntenrechten Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "PROCES": {
+    "id": "processen-assistent",
+    "name": "Processen Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "RISICO": {
+    "id": "risico-assistent-door-ictrecht",
+    "name": "Bedrijfsmiddelen & Risico Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "ROLVERD": {
+    "id": "avg-rolverdeling-assistent",
+    "name": "AVG-rolverdeling Assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "RVB": {
+    "id": "rechten-van-betrokkenen-assistent",
+    "name": "AVG rechten van betrokkenen assistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "VSO": {
+    "id": "vso-checker-door-ictrecht",
+    "name": "VSO Checker",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "WOO": {
+    "id": "woo-guide",
+    "name": "Woo Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "WOODOC": {
+    "id": "woo-document-beoordelingsassistent",
+    "name": "Woo document beoordelingsassistent",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "WPG": {
+    "id": "wpg-guide-door-ictrecht",
+    "name": "WPG Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  },
+  "ZORG": {
+    "id": "zorgrecht-guide-door-ictrecht",
+    "name": "Zorgrecht Guide",
+    "bevestigd_op": "2026-11-16",
+    "bron": "naam+opmerking"
+  }
+}

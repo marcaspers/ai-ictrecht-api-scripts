@@ -2,5 +2,13 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 output/
 logs/
+# Lokale database en import/exportbestanden
+data/
+# Registers en andere werkmappen horen niet in git (behalve de testfixture en het lege exportsjabloon)
+*.xlsx
+~$*
+!tests/fixtures/*.xlsx
+!sjabloon/*.xlsx
