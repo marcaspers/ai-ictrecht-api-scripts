@@ -1,0 +1,12 @@
+.git
+.env
+.venv
+**/__pycache__
+.pytest_cache
+data
+output
+logs
+*.xlsx
+!sjabloon/*.xlsx
+!tests/fixtures/*.xlsx
+BRIEFING*.md
