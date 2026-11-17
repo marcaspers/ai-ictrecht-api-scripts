@@ -50,6 +50,7 @@ class RunOpties:
     ja: bool = False
     parallel: int = 1
     hervat: bool = False
+    alleen_nieuw: bool = False  # cases overslaan die voor deze versie al ooit een run hebben
     niet_interactief: bool = False
 
 
@@ -130,7 +131,9 @@ def kies_modellen(sessie: Session, opties: RunOpties) -> tuple[list[str], list[T
             raise UitvoerFout(f"Onbekende of verwijderde TC-ID('s): {', '.join(onbekend)}")
         tcs = [per_id[t] for t in dict.fromkeys(opties.tc)]
         if opties.modellen:
-            tcs = [t for t in tcs if t.model_id in opties.modellen]
+            anders = [t.tc_id for t in tcs if t.model_id not in opties.modellen]
+            if anders:
+                raise UitvoerFout(f"TC-ID('s) horen niet bij {', '.join(opties.modellen)}: {', '.join(anders)}")
         return list(dict.fromkeys(t.model_id for t in tcs)), tcs, True
     if opties.modellen:
         onbekend = [m for m in opties.modellen if not modelregels(sessie, m)]
@@ -159,11 +162,18 @@ def alleen_goedgekeurd(sessie: Session, opties: RunOpties) -> bool:
     return instelling(sessie, ALLEEN_GOEDGEKEURD) != "N"
 
 
+def al_gedraaid(sessie: Session, versie: str, datum: dt.date | None = None) -> dict[str, str]:
+    """TC-ID -> laatste Run-ID voor (niet-verwijderde) runs van deze versie; met ``datum`` alleen van die dag."""
+    query = select(Testrun.tc_id, Testrun.run_id).where(
+        Testrun.modelversie == versie, Testrun.verwijderd_op.is_(None)).order_by(Testrun.run_id)
+    if datum is not None:
+        query = query.where(Testrun.datum == datum)
+    return {tc_id: run_id for tc_id, run_id in sessie.execute(query)}
+
+
 def vandaag_gedraaid(sessie: Session, versie: str, vandaag: dt.date) -> dict[str, str]:
     """TC-ID -> Run-ID voor runs die vandaag al voor deze versie zijn gedraaid."""
-    rijen = sessie.execute(select(Testrun.tc_id, Testrun.run_id).where(
-        Testrun.modelversie == versie, Testrun.datum == vandaag, Testrun.verwijderd_op.is_(None)))
-    return {tc_id: run_id for tc_id, run_id in rijen}
+    return al_gedraaid(sessie, versie, vandaag)
 
 
 def selecteer(tcs: list[Testcase], opties: RunOpties, goedgekeurd: bool, gedaan: dict[str, str] | None = None
@@ -185,7 +195,9 @@ def selecteer(tcs: list[Testcase], opties: RunOpties, goedgekeurd: bool, gedaan:
         elif (tc.context or "").strip() and is_bijlage(tc.context):
             overgeslagen.append((tc.tc_id, "bijlage niet ondersteund"))
         elif gedaan and tc.tc_id in gedaan:
-            overgeslagen.append((tc.tc_id, f"vandaag al gedraaid ({gedaan[tc.tc_id]}), --hervat"))
+            reden = "al gedraaid voor deze versie" if opties.alleen_nieuw else "vandaag al gedraaid"
+            optie = "--alleen-nieuw" if opties.alleen_nieuw else "--hervat"
+            overgeslagen.append((tc.tc_id, f"{reden} ({gedaan[tc.tc_id]}), {optie}"))
         else:
             gekozen.append(tc)
     return gekozen, overgeslagen
@@ -268,7 +280,12 @@ def voer_uit(sessie: Session, opties: RunOpties, client, omg: Omgeving | None = 
     # 2. Selectie en plan
     goedgekeurd = alleen_goedgekeurd(sessie, opties)
     for model_id, doel in res.doelen.items():
-        gedaan = vandaag_gedraaid(sessie, doel.regel.versie, vandaag) if opties.hervat else None
+        if opties.alleen_nieuw:
+            gedaan = al_gedraaid(sessie, doel.regel.versie)
+        elif opties.hervat:
+            gedaan = vandaag_gedraaid(sessie, doel.regel.versie, vandaag)
+        else:
+            gedaan = None
         cases, overgeslagen = selecteer([t for t in tcs if t.model_id == model_id], opties, goedgekeurd, gedaan)
         res.overgeslagen.extend(overgeslagen)
         for tc in cases:

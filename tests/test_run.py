@@ -156,6 +156,23 @@ def test_ctrl_c_bewaart_geslaagde_runs(gevuld, omg):
     assert [r.tc_id for r in res.gepland] == ["IE-KERN-002", "IE-KERN-003"]
 
 
+def test_alleen_nieuw_slaat_eerder_gedraaide_cases_over(gevuld, omg):
+    import datetime as dt
+    voer_uit(gevuld, opties(tc=["IE-KERN-001"]), FakeClient(), omg)
+    omg.vandaag = VANDAAG + dt.timedelta(days=1)  # een dag later
+    tcs = ["IE-KERN-001", "IE-KERN-002"]
+    # --hervat kijkt alleen naar vandaag: KERN-001 wordt opnieuw gedraaid
+    assert [r.tc_id for r in voer_uit(gevuld, opties(tc=tcs, hervat=True, dry_run=True), FakeClient(), omg).gepland] == tcs
+    # --alleen-nieuw kijkt naar alle datums
+    res = voer_uit(gevuld, opties(tc=tcs, alleen_nieuw=True, dry_run=True), FakeClient(), omg)
+    assert [r.tc_id for r in res.gepland] == ["IE-KERN-002"]
+    assert ("IE-KERN-001", "al gedraaid voor deze versie (RUN-20261116-001), --alleen-nieuw") in res.overgeslagen
+    # Een verwijderde run telt niet mee
+    runs(gevuld)[0].verwijderd_op = nu()
+    gevuld.commit()
+    assert len(voer_uit(gevuld, opties(tc=tcs, alleen_nieuw=True, dry_run=True), FakeClient(), omg).gepland) == 2
+
+
 def test_parallel(gevuld, omg):
     res = voer_uit(gevuld, opties(type=["KERN"], parallel=3), FakeClient(), omg)
     r = runs(gevuld)
@@ -170,3 +187,21 @@ def test_bevestiging_nee_doet_niets(gevuld, omg):
     client = FakeClient()
     voer_uit(gevuld, opties(tc=["IE-KERN-001"], ja=False), client, omg)
     assert not client.calls and not runs(gevuld)
+
+
+def test_tc_met_model_dat_niet_klopt(gevuld, omg):
+    with pytest.raises(UitvoerFout, match="horen niet bij GPT"):
+        voer_uit(gevuld, opties(modellen=["GPT"], tc=["IE-KERN-001"], dry_run=True), FakeClient(), omg)
+
+
+@pytest.mark.parametrize("argv, code, melding", [
+    (["--model", "IE", "--tc", "IE-BUITEN-001"], 0, "IE-BUITEN-001"),   # model + tc samen mag
+    (["--tc", "IE-BUITEN-001"], 0, "IE-BUITEN-001"),
+    (["--alle", "--tc", "IE-BUITEN-001"], 2, "niet samen met --alle"),
+    ([], 2, "Kies wat er gedraaid wordt"),
+])
+def test_cli_run_selectie(gevuld, omg, capsys, argv, code, melding):
+    import testregister
+    assert testregister.main(["run", *argv, "--dry-run", "--ook-concept", "--models", str(omg.models_pad)]) == code
+    uit = capsys.readouterr()
+    assert melding in uit.out + uit.err

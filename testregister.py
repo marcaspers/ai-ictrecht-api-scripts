@@ -6,7 +6,7 @@
     python testregister.py export  [--model IE] [--uit pad.xlsx]     # database → Excel-register
     python testregister.py info    [--model IE]
     python testregister.py koppel  [--model IE] [--ververs]
-    python testregister.py run       (--alle | --model IE … | --tc IE-KERN-001 …) [--versie v1.0] [opties]
+    python testregister.py run       (--alle | --model IE … [--tc IE-KERN-001 …] | --tc IE-KERN-001 …) [opties]
     python testregister.py beoordeel (--alle | --model IE … | --run RUN-… …) [--versie v1.0] [opties]
     python testregister.py kalibratie [--model IE] [--versie v1.0]
     python testregister.py instelling alleen-goedgekeurd J|N
@@ -164,11 +164,16 @@ def _omgeving(args) -> Omgeving:
 
 
 def cmd_run(args) -> int:
+    if not (args.alle or args.model or args.tc):
+        raise UitvoerFout("Kies wat er gedraaid wordt: --alle, --model <Model-ID> en/of --tc <TC-ID>")
+    if args.alle and args.tc:
+        raise UitvoerFout("--tc kan niet samen met --alle (wel met --model)")
     goedgekeurd = True if args.alleen_goedgekeurd else (False if args.ook_concept else None)
     opties = RunOpties(alle=args.alle, modellen=args.model or [], tc=args.tc or [], versie=args.versie,
                        type=args.type or [], alleen_regressie=args.alleen_regressie, alleen_goedgekeurd=goedgekeurd,
                        herhalingen=args.herhalingen, uitvoerder=args.uitvoerder, dry_run=args.dry_run, ja=args.ja,
-                       parallel=args.parallel, hervat=args.hervat, niet_interactief=args.niet_interactief)
+                       parallel=args.parallel, hervat=args.hervat, alleen_nieuw=args.alleen_nieuw,
+                       niet_interactief=args.niet_interactief)
     with open_sessie() as s:
         res = voer_uit(s, opties, Client(max_retries=3), _omgeving(args))
     return 1 if (res.fouten or res.afgebroken) else 0
@@ -229,16 +234,17 @@ def bouw_parser() -> argparse.ArgumentParser:
     p.add_argument("--models", default=kp.STANDAARD_MODELLENBESTAND, help="Pad naar models.json")
     p.set_defaults(func=cmd_koppel)
 
-    def selectie(p, wat):
-        g = p.add_mutually_exclusive_group(required=True)
+    def selectie(p, wat, verplicht=True):
+        g = p.add_mutually_exclusive_group(required=verplicht)
         g.add_argument("--alle", action="store_true", help=f"Alle {wat}")
         g.add_argument("--model", "--domein", action="append", metavar="MODEL-ID",
                        help=f"{wat.capitalize()} van dit model (herhaalbaar)")
         return g
 
     p = sub.add_parser("run", help="Testcases via de API uitvoeren en als testruns opslaan")
-    g = selectie(p, "testcases")
-    g.add_argument("--tc", action="append", metavar="TC-ID", help="Alleen deze testcase (herhaalbaar)")
+    selectie(p, "testcases", verplicht=False)  # --alle of --model; --tc mag los of samen met --model
+    p.add_argument("--tc", action="append", metavar="TC-ID",
+                   help="Alleen deze testcase (herhaalbaar; te combineren met --model)")
     p.add_argument("--versie", help="Modelversie (standaard per model de nieuwste versie 'in test')")
     p.add_argument("--type", action="append", metavar="TYPE", help="Alleen dit testtype (herhaalbaar)")
     p.add_argument("--alleen-regressie", action="store_true", help="Alleen cases met Regressieset = J")
@@ -251,6 +257,8 @@ def bouw_parser() -> argparse.ArgumentParser:
     p.add_argument("--ja", action="store_true", help="Geen bevestigingsvraag")
     p.add_argument("--parallel", type=int, default=1, help=f"Gelijktijdige calls (1–{MAX_PARALLEL})")
     p.add_argument("--hervat", action="store_true", help="Cases overslaan die vandaag al voor deze versie zijn gedraaid")
+    p.add_argument("--alleen-nieuw", action="store_true",
+                   help="Cases overslaan die voor deze versie al een run hebben (ongeacht de datum)")
     p.add_argument("--niet-interactief", action="store_true", help="Bij twijfel over de koppeling stoppen")
     p.add_argument("--models", default=kp.STANDAARD_MODELLENBESTAND, help="Pad naar models.json (voor --dry-run)")
     p.set_defaults(func=cmd_run)

@@ -4,6 +4,7 @@
 #   docker compose run --rm cli import "data/Testregister….xlsx"
 #   docker compose run --rm cli run --model IE --dry-run
 #   docker compose run --rm cli export --model IE          # → data/
+#   docker compose run --rm play models                    # speeltuin (play.py)
 #
 # Bestanden voor import/export staan in ./data (gekoppeld aan /app/data in de container).
 # Instellingen en geheimen komen uit .env (zie .env.example); die zitten nooit in de image.
@@ -60,6 +61,15 @@ services:
   cli:
     <<: *app
     profiles: ["cli"]
+    stdin_open: true
+    tty: true
+
+  play:
+    <<: *app
+    profiles: ["cli"]
+    entrypoint: ["python", "play.py"]
+    command: ["--help"]
+    depends_on: []
     stdin_open: true
     tty: true
 

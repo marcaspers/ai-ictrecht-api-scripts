@@ -4,6 +4,15 @@ Python-scripts om te experimenteren met https://proxy.ai.ictrecht.nl/docs.
 
 ## Setup
 
+Alles kan via Docker; dan hoef je lokaal geen Python te installeren. Alleen Docker (Desktop) is nodig.
+
+```bash
+cp .env.example .env            # en vul ICTRECHT_API_TOKEN in
+docker compose build            # image bouwen (opnieuw na elke git pull)
+```
+
+Zonder Docker:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -13,17 +22,22 @@ cp .env.example .env   # en vul ICTRECHT_API_TOKEN in
 
 ## Gebruik
 
+Via Docker (`play` is `python play.py` in de container):
+
 ```bash
-python play.py models                       # GET  /api/models (+ werkt models.json bij)
-python play.py prompts                      # GET  /api/v1/prompts
-python play.py functions                    # GET  /api/v1/functions
-python play.py chat "Wat is de AVG?"        # POST /api/chat/completions
-python play.py chat "..." -m <model> --stream
-python play.py chat "..." -m 3              # model op nummer uit models.json
-python play.py chat -i -s "Je bent een jurist"   # interactief gesprek
-python play.py raw GET models               # willekeurig endpoint
-python play.py login jij@ictrecht.nl        # token ophalen met e-mail/wachtwoord
+docker compose run --rm play models                  # GET  /api/models (+ werkt models.json bij)
+docker compose run --rm play prompts                 # GET  /api/v1/prompts
+docker compose run --rm play functions               # GET  /api/v1/functions
+docker compose run --rm play chat "Wat is de AVG?"   # POST /api/chat/completions
+docker compose run --rm play chat "..." -m <model> --stream
+docker compose run --rm play chat "..." -m 3         # model op nummer uit models.json
+docker compose run --rm play chat -i -s "Je bent een jurist"   # interactief gesprek
+docker compose run --rm play raw GET models          # willekeurig endpoint
+docker compose run --rm play login jij@ictrecht.nl   # token ophalen met e-mail/wachtwoord
 ```
+
+Zonder Docker is het hetzelfde met `python play.py …` in plaats van `docker compose run --rm play …`.
+`models.json` en `logs/` worden in de container gekoppeld, dus wijzigingen komen gewoon in je projectmap.
 
 ## In je eigen scripts
 
@@ -67,14 +81,51 @@ bekijk en wijzig je gegevens en scoren juristen de antwoorden.
 
 ```bash
 cp .env.example .env            # token invullen; centraal: ook POSTGRES_PASSWORD en GUI_WACHTWOORD
+docker compose build
 docker compose up -d            # database + beheerscherm op http://localhost:8501
-docker compose run --rm cli import "data/Testregister_AI-modellen_ICTRecht_20261116 IE.xlsx"
-docker compose run --rm cli run --model IE --dry-run
 ```
 
-Bestanden voor import en export zet je in `./data` (in de container: `/app/data`). Bij `docker compose up` maakt
-of werkt het beheerscherm het databaseschema automatisch bij. De data staan in het Docker-volume `pgdata`.
+`docker compose up -d` start de database en het beheerscherm, en maakt of werkt het databaseschema
+automatisch bij. De command line draai je daarnaast met `docker compose run --rm cli <commando>`: elke
+keer een tijdelijke container die na afloop verdwijnt. Vragen om bevestiging (`[j/N]`) werken gewoon.
+
+```bash
+docker compose run --rm cli db init        # alleen nodig als het beheerscherm niet draait
+docker compose run --rm cli import "data/Testregister_AI-modellen_ICTRecht_20261116 IE.xlsx"
+docker compose run --rm cli info --model IE
+docker compose run --rm cli run --model IE --dry-run
+docker compose run --rm cli run --model IE
+docker compose run --rm cli beoordeel --model IE
+docker compose run --rm cli kalibratie --model IE
+docker compose run --rm cli export --model IE
+```
+
+Tip: met `alias tr='docker compose run --rm cli'` typ je `tr run --model IE`.
+
+Welke mappen de container ziet:
+
+| Op je computer | In de container | Waarvoor |
+|---|---|---|
+| `./data` | `/app/data` | Excel-bestanden voor import, exports, back-ups |
+| `./output` | `/app/output` | CSV van kalibratie |
+| `./logs` | `/app/logs` | API-log |
+| `./models.json` | `/app/models.json` | modellenlijst |
+
+Paden in commando's zijn relatief aan `/app`. Een register importeren doe je dus door het eerst in `./data`
+te zetten en dan `data/<bestand>.xlsx` mee te geven. Bestanden buiten deze mappen ziet de container niet.
+`.env` wordt bij het starten ingelezen; na een wijziging in `.env` is `docker compose up -d` genoeg (een
+nieuwe build is niet nodig). Na een `git pull` wel: `docker compose build && docker compose up -d`.
+
+De data staan in het Docker-volume `pgdata`. `docker compose down` stopt alles en laat de data staan.
 **Let op:** `docker compose down -v` verwijdert dat volume en dus alle gegevens.
+
+Overige handige commando's:
+
+```bash
+docker compose ps                          # wat draait er
+docker compose logs -f gui                 # log van het beheerscherm
+docker compose exec db psql -U testregister testregister   # SQL-prompt op de database
+```
 
 Back-up maken en terugzetten:
 
@@ -96,6 +147,9 @@ Met `DATABASE_URL` in `.env` gebruikt de CLI buiten Docker de Postgres-container
 
 ### Commando's
 
+Hieronder staat steeds `testregister.py`. In Docker vervang je `python testregister.py` door
+`docker compose run --rm cli`.
+
 ```bash
 python testregister.py db init                            # schema aanmaken/bijwerken (Alembic); veilig om te herhalen
 python testregister.py import  register.xlsx [--dry-run] [--ja]
@@ -106,9 +160,10 @@ python testregister.py run     --alle | --model IE [--model AVG …] | --tc IE-K
 python testregister.py beoordeel --alle | --model IE | --run RUN-…   [--versie v1.0] [--opnieuw] [--dry-run]
 python testregister.py kalibratie [--model IE] [--versie v1.0]
 python testregister.py instelling alleen-goedgekeurd [J|N]
+python testregister.py <commando> --help                  # alle opties
 ```
 
-`--domein` is een alias van `--model`. In Docker: `docker compose run --rm cli <commando> …`.
+`--domein` is een alias van `--model`.
 
 **import** maakt eerst een plan, toont het en importeert pas na bevestiging. Er wordt **nooit iets
 overschreven**:
@@ -131,8 +186,9 @@ generatorscript) maak je met `python scripts/maak_sjabloon.py <register.xlsx>`.
 versie die niet is uitgefaseerd. Modellen zonder versie worden bij `--alle` overgeslagen; bij `--model`
 stopt het commando. Verder: `--type`, `--alleen-regressie`, `--ook-concept` / `--alleen-goedgekeurd`
 (standaard volgt run de instelling *alleen-goedgekeurd*), `--herhalingen`, `--parallel` (max 4),
-`--uitvoerder`, `--hervat`, `--dry-run` en `--ja`. Elke prompt gaat in een nieuw gesprek, zonder eigen
-systeemprompt of temperatuur. Elke geslaagde run staat direct in de database, met het volledige antwoord,
+`--uitvoerder`, `--dry-run` en `--ja`. Al gedraaide cases overslaan: `--hervat` (vandaag al gedraaid voor
+die versie, om na afbreken verder te gaan) of `--alleen-nieuw` (ooit al gedraaid voor die versie). Elke
+prompt gaat in een nieuw gesprek, zonder eigen systeemprompt of temperatuur. Elke geslaagde run staat direct in de database, met het volledige antwoord,
 de payload, de ruwe respons (met bronnen) en de duur. Ctrl-C verliest dus niets.
 
 **beoordeel** scoort volgens [beoordeling/rubric.md](beoordeling/rubric.md) met `--beoordelaar-model` of
@@ -170,7 +226,8 @@ register (Excel bewaart keuzelijsten die naar een ander tabblad verwijzen als ex
 kent). Daarom leest het script met openpyxl, maar schrijft het door alleen de XML van de betreffende cellen
 aan te passen (`register/xlsxpatch.py`). Excel herberekent de formules bij het openen (`fullCalcOnLoad`).
 
-Tests (zonder netwerk, op SQLite): `python -m pytest`
+Tests (zonder netwerk, op SQLite): `pip install -r requirements-dev.txt && python -m pytest`. De tests
+draaien lokaal; pytest zit niet in de Docker-image.
 
 ## Structuur
 
@@ -184,7 +241,7 @@ Tests (zonder netwerk, op SQLite): `python -m pytest`
 - `sjabloon/Testregister_sjabloon.xlsx`: leeg register voor de export
 - `modelkoppeling.json`: startwaarden voor de koppelingen; worden bij `db init` in een lege database gezet
 - `beoordeling/rubric.md`: het scoresysteem; bron voor de beoordelaarsprompt
-- `Dockerfile`, `docker-compose.yml`: database, beheerscherm en CLI
+- `Dockerfile`, `docker-compose.yml`: database (`db`), beheerscherm (`gui`), testregister-CLI (`cli`) en speeltuin (`play`)
 - `tests/`: pytest; `tests/fixtures/` bevat een kopie van het IE-voorbeeldregister
 - `.env`: je token en instellingen (staat in `.gitignore`)
 - `data/`, `logs/`, `output/`: lokale database en import/export, API-logs en CSV's (staan in `.gitignore`)
