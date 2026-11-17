@@ -1,5 +1,4 @@
 import datetime as dt
-import shutil
 import sys
 from pathlib import Path
 
@@ -8,6 +7,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from db.sessie import init_db, open_sessie  # noqa: E402
+from register.importeren import importeer  # noqa: E402
 from register.xlsxpatch import patch_werkmap  # noqa: E402
 from testrunner.uitvoeren import Omgeving  # noqa: E402
 
@@ -17,7 +18,7 @@ IE_ID = "ie-recht-guide-door-ictrecht"
 
 
 class FakeClient:
-    """Nep-Client zonder netwerk. ``antwoorden``: functie (messages, model) -> antwoordtekst of Exception."""
+    """Nep-Client zonder netwerk. ``antwoord``: functie (messages, model, temperature) -> tekst, dict of Exception."""
 
     def __init__(self, antwoord=None, modellen=None):
         self.calls = []
@@ -45,17 +46,30 @@ class FakeClient:
 
 
 @pytest.fixture
-def register(tmp_path) -> Path:
-    """Kopie van het IE-voorbeeldregister in een tijdelijke map."""
-    pad = tmp_path / "invoer" / "register.xlsx"
-    pad.parent.mkdir()
-    shutil.copy(FIXTURE, pad)
-    return pad
+def db_url(tmp_path, monkeypatch) -> str:
+    """Lege SQLite-database, aangemaakt via de Alembic-migraties (zoals `db init`)."""
+    url = f"sqlite:///{tmp_path / 'test.db'}"
+    init_db(url)
+    monkeypatch.setenv("DATABASE_URL", url)
+    return url
+
+
+@pytest.fixture
+def sessie(db_url):
+    with open_sessie(db_url) as s:
+        yield s
+
+
+@pytest.fixture
+def gevuld(sessie):
+    """Database met het IE-voorbeeldregister geïmporteerd (42 modellen, 24 testcases, IE v1.0)."""
+    importeer(sessie, FIXTURE, ja=True, uitvoer=lambda s: None)
+    return sessie
 
 
 @pytest.fixture
 def variant(tmp_path):
-    """Maak een variant van het register met aangepaste cellen (alleen voor tests: ook andere tabbladen)."""
+    """Maak een variant van het register met aangepaste cellen."""
     teller = [0]
 
     def maak(wijzigingen: dict) -> Path:
@@ -66,13 +80,13 @@ def variant(tmp_path):
 
 
 @pytest.fixture
-def omg(tmp_path):
-    koppeling = tmp_path / "modelkoppeling.json"
+def omg(tmp_path, monkeypatch):
+    monkeypatch.delenv("ICTRECHT_TESTER", raising=False)  # .env van de ontwikkelaar niet laten meetellen
     models = tmp_path / "models.json"
     models.write_text('{"updated": "x", "models": [{"nr": 16, "id": "%s", "name": "IE Recht Guide", '
                       '"available": true}]}' % IE_ID, encoding="utf-8")
     uitvoer = []
-    o = Omgeving(output_dir=tmp_path / "output", koppeling_pad=koppeling, models_pad=models,
+    o = Omgeving(models_pad=models, output_dir=tmp_path / "output",
                  invoer=lambda prompt: pytest.fail(f"onverwachte vraag: {prompt}"), uitvoer=uitvoer.append,
                  vandaag=VANDAAG)
     o.log = uitvoer

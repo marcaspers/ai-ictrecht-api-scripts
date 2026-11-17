@@ -1,16 +1,19 @@
-"""`kalibratie`: LLM-oordelen (output/beoordelingen/) vergelijken met de scores van de jurist in het register."""
+"""`kalibratie`: LLM-beoordelingen vergelijken met die van de jurist (type mens), beide uit de database."""
 
 from __future__ import annotations
 
 import csv
 import datetime as dt
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from db.models import DIMENSIES, LLM, MENS, Testrun
 from register.eindoordeel import eindoordeel
-from register.werkmap import DIMENSIES, Register, tekst
-from .uitvoeren import Omgeving, UitvoerFout
+from register.werkmap import tekst
+from .uitvoeren import Omgeving
 
 DOEL_GELIJK = 0.80
 
@@ -78,37 +81,33 @@ class KalibratieResultaat:
         return uit
 
 
-def kalibreer(register_pad: str | Path, model: str, versie: str, omg: Omgeving | None = None
-              ) -> KalibratieResultaat:
+def kalibreer(sessie: Session, modellen: list[str] | None = None, versie: str | None = None,
+              omg: Omgeving | None = None) -> KalibratieResultaat:
     omg = omg or Omgeving()
     say = omg.uitvoer
-    oordelen_dir = Path(omg.output_dir) / "beoordelingen"
-    reg = Register.laad(register_pad)
-    if reg.structuurfouten:
-        raise UitvoerFout("; ".join(reg.structuurfouten))
-    if not reg.modelregel(model, versie):
-        raise UitvoerFout(f"Model-ID '{model}' met Modelversie '{versie}' staat niet in Modellen")
     res = KalibratieResultaat()
-
-    for run in reg.testruns:
-        if reg.model_van_run(run) != model or tekst(run["Modelversie"]) != versie:
+    q = (select(Testrun).where(Testrun.verwijderd_op.is_(None))
+         .options(selectinload(Testrun.beoordelingen), selectinload(Testrun.testcase)).order_by(Testrun.run_id)
+         .execution_options(populate_existing=True))
+    if modellen:
+        q = q.where(Testrun.model_id.in_(modellen))
+    if versie:
+        q = q.where(Testrun.modelversie == versie)
+    for run in sessie.scalars(q):
+        mens_b = run.beoordeling(MENS)
+        if not mens_b or any(v is None for v in mens_b.scores().values()):
             continue
-        if tekst(run["Type beoordelaar"]).lower() != "mens" or any(tekst(run[d]) == "" for d in DIMENSIES):
+        llm_b = run.beoordeling(LLM)
+        if not llm_b:
+            res.zonder_llm.append(run.run_id)
             continue
-        run_id = tekst(run["Run-ID"])
-        pad = oordelen_dir / f"{run_id}.json"
-        if not pad.exists():
-            res.zonder_llm.append(run_id)
-            continue
-        llm = json.loads(pad.read_text(encoding="utf-8"))["oordeel"]
-        mens = {d: run[d] for d in DIMENSIES}
-        tc = reg.testcase(tekst(run["TC-ID"])) or {}
+        mens, llm = mens_b.scores(), llm_b.scores()
         res.vergelijkingen.append(Vergelijking(
-            run_id=run_id, tc_id=tekst(run["TC-ID"]), testtype=tekst(tc.get("Testtype")),
-            mens=mens, llm=llm["scores"],
-            ko_mens=tekst(run["K.O."]).upper(), ko_code_mens=tekst(run["K.O.-code"]),
-            ko_llm=llm["ko"]["ko"], ko_code_llm=llm["ko"].get("code") or "",
-            eind_mens=eindoordeel(mens, run["K.O."]), eind_llm=eindoordeel(llm["scores"], llm["ko"]["ko"])))
+            run_id=run.run_id, tc_id=run.tc_id, testtype=run.testcase.testtype, mens=mens, llm=llm,
+            ko_mens=mens_b.ko.upper(), ko_code_mens=mens_b.ko_code, ko_llm=llm_b.ko.upper(), ko_code_llm=llm_b.ko_code,
+            eind_mens=eindoordeel(mens, mens_b.ko), eind_llm=eindoordeel(llm, llm_b.ko)))
+    model = "+".join(modellen) if modellen else "alle"
+    versie = versie or "alle-versies"
 
     # Rapport
     n = len(res.vergelijkingen)

@@ -5,7 +5,8 @@ import json
 
 import pytest
 
-from register.werkmap import ModelRegel
+from db.models import Model
+from db.opslag import bewaar_koppelingen, laad_koppelingen
 from testrunner import koppeling as kp
 
 VANDAAG = dt.date(2026, 11, 16)
@@ -18,8 +19,7 @@ MODELLEN = kp.normaliseer_modellenlijst({"models": [
 
 
 def regel(model_id="IE", naam="IE Recht Guide", opm="OpenWebUI-id: ie-recht-guide-door-ictrecht (nr 16)"):
-    return ModelRegel(rij=2, model_id=model_id, naam=naam, versie="v1.0", versie_waarde="v1.0", status="",
-                      opmerkingen=opm)
+    return Model(model_id=model_id, naam=naam, versie="v1.0", status="", opmerkingen=opm)
 
 
 def geen_vraag(prompt):
@@ -89,31 +89,30 @@ def test_niet_interactief_stopt_bij_twijfel():
         kp.bepaal(regel(naam="Onbekend", opm=""), MODELLEN, {}, interactief=False)
 
 
-def test_cache_wordt_gebruikt_en_gecontroleerd(tmp_path):
-    pad = tmp_path / "modelkoppeling.json"
+def test_cache_wordt_gebruikt_en_gecontroleerd(sessie):
     cache = {"IE": {"id": "patintenrechten-assistent", "name": "x", "bevestigd_op": "2026-11-01", "bron": "handmatig"}}
-    kp.bewaar_cache(pad, cache)
+    bewaar_koppelingen(sessie, cache)
+    sessie.commit()
     # Cache wint van naam/opmerking zolang het id nog bestaat
-    assert kp.bepaal(regel(), MODELLEN, kp.laad_cache(pad), invoer=geen_vraag)["id"] == "patintenrechten-assistent"
+    assert kp.bepaal(regel(), MODELLEN, laad_koppelingen(sessie), invoer=geen_vraag)["id"] == "patintenrechten-assistent"
     # Verdwenen id -> opnieuw vragen
     cache = {"IE": {"id": "oud-model", "name": "x", "bevestigd_op": "2026-11-01", "bron": "handmatig"}}
     with pytest.raises(kp.KoppelingFout, match="niet \\(meer\\) in de actuele"):
         kp.bepaal(regel(), MODELLEN, cache, interactief=False)
     k = kp.bepaal(regel(), MODELLEN, cache, invoer=lambda p: "1", uitvoer=lambda s: None, vandaag=VANDAAG)
     assert k["id"] == "ie-recht-guide-door-ictrecht" and cache["IE"]["bevestigd_op"] == "2026-11-16"
-    kp.bewaar_cache(pad, cache)
-    assert json.loads(pad.read_text())["IE"]["id"] == "ie-recht-guide-door-ictrecht"
+    bewaar_koppelingen(sessie, cache)
+    sessie.commit()
+    assert laad_koppelingen(sessie)["IE"]["id"] == "ie-recht-guide-door-ictrecht"
 
 
-def test_cli_koppel(tmp_path, register):
+def test_cli_koppel(tmp_path, gevuld):
     import testregister
     models = tmp_path / "m.json"
     models.write_text(json.dumps({"models": [m | {"nr": i} for i, m in enumerate(MODELLEN)]}))
-    koppeling = tmp_path / "k.json"
-    code = testregister.main(["koppel", str(register), "--model", "IE", "--models", str(models),
-                              "--koppeling", str(koppeling), "--niet-interactief"])
-    assert code == 0 and json.loads(koppeling.read_text())["IE"]["bron"] == "naam+opmerking"
+    code = testregister.main(["koppel", "--model", "IE", "--models", str(models), "--niet-interactief"])
+    gevuld.expire_all()
+    assert code == 0 and laad_koppelingen(gevuld)["IE"]["bron"] == "naam+opmerking"
     # Een model waarvoor de koppeling twijfelachtig is stopt met een fout
-    code = testregister.main(["koppel", str(register), "--model", "GPT", "--models", str(models),
-                              "--koppeling", str(koppeling), "--niet-interactief"])
+    code = testregister.main(["koppel", "--model", "GPT", "--models", str(models), "--niet-interactief"])
     assert code == 2

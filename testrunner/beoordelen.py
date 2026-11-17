@@ -1,7 +1,7 @@
 """`beoordeel`: testruns laten scoren door een LLM-beoordelaar volgens beoordeling/rubric.md.
 
-Standaard gaan de oordelen alleen naar output/beoordelingen/<Run-ID>.json; het register blijft
-voor de jurist. Met --schrijf-in-register worden lege scorevelden gevuld (Type beoordelaar = LLM).
+Het oordeel wordt als beoordeling van het type LLM bij de run opgeslagen (met berichten en ruwe antwoorden).
+De beoordeling van de jurist (type mens) staat daar los van, zodat beide naast elkaar bestaan voor de kalibratie.
 """
 
 from __future__ import annotations
@@ -13,17 +13,18 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from db.models import DIMENSIES, LLM, Beoordeling, Testcase, Testrun, nu
+from db.opslag import laad_koppelingen
 from register.eindoordeel import eindoordeel
-from register.validatie import valideer
-from register.werkmap import DIMENSIES, Register, tekst, volgende_uitvoerpad
-from . import koppeling as kp
 from .uitvoeren import Omgeving, UitvoerFout, antwoord_uit
 
 RUBRIC_PAD = Path(__file__).resolve().parent.parent / "beoordeling" / "rubric.md"
 SCORES = {0, 1, 2, 3, "n.v.t."}
 KO_CODES = {f"K.O.{i}" for i in range(1, 6)}
 KERNPUNT_OORDELEN = {"aanwezig", "deels", "afwezig"}
-SCOREVELDEN = [*DIMENSIES, "K.O.", "K.O.-code"]
 
 REGELS = """\
 ## Werkwijze voor de beoordelaar
@@ -61,14 +62,13 @@ class OngeldigOordeel(ValueError):
 
 @dataclass
 class BeoordeelOpties:
-    model: str
-    versie: str
+    alle: bool = False
+    modellen: list[str] = field(default_factory=list)
+    versie: str | None = None
     run: list[str] = field(default_factory=list)
     opnieuw: bool = False
     dry_run: bool = False
-    schrijf_in_register: bool = False
     beoordelaar_model: str | None = None
-    uit: str | None = None
 
 
 @dataclass
@@ -77,7 +77,6 @@ class BeoordeelResultaat:
     fouten: list[tuple[str, str]] = field(default_factory=list)
     overgeslagen: list[tuple[str, str]] = field(default_factory=list)
     geselecteerd: list[str] = field(default_factory=list)
-    pad: Path | None = None
 
 
 # --- prompt --------------------------------------------------------------------
@@ -98,22 +97,20 @@ def systeemprompt(rubric: str) -> str:
     return f"{rubric.strip()}\n\n{REGELS}"
 
 
-def gebruikersbericht(tc: dict, antwoord: str, verwacht: dict[str, str]) -> str:
-    testtype = tekst(tc["Testtype"]).upper()
-    peildatum = tc["Peildatum"]
-    if isinstance(peildatum, (dt.date, dt.datetime)):
-        peildatum = f"{peildatum:%d-%m-%Y}"
+def gebruikersbericht(tc: Testcase, antwoord: str, verwacht: dict[str, str]) -> str:
+    testtype = (tc.testtype or "").upper()
+    peildatum = f"{tc.peildatum:%d-%m-%Y}" if tc.peildatum else ""
 
     def veld(naam, waarde):
-        return f"## {naam}\n{tekst(waarde) or '(leeg)'}\n"
+        return f"## {naam}\n{(waarde or '').strip() or '(leeg)'}\n"
 
     return "\n".join([
         f"## Testtype\n{testtype} — {verwacht.get(testtype, '(onbekend testtype)')}\n",
-        veld("Prompt", tc["Prompt"]),
-        veld("Context / bijlage", tc["Context / bijlage"]),
-        veld("Kernpunten verwacht antwoord", tc["Kernpunten verwacht antwoord"]),
-        veld("Verwacht gedrag", tc["Verwacht gedrag"]),
-        veld("Verwachte bronnen", tc["Verwachte bronnen"]),
+        veld("Prompt", tc.prompt),
+        veld("Context / bijlage", tc.context),
+        veld("Kernpunten verwacht antwoord", tc.kernpunten),
+        veld("Verwacht gedrag", tc.verwacht_gedrag),
+        veld("Verwachte bronnen", tc.verwachte_bronnen),
         veld("Peildatum", peildatum),
         f"## Antwoord van het model\n<<<\n{antwoord}\n>>>\n",
         "Beoordeel dit antwoord. Antwoord uitsluitend met de JSON.",
@@ -202,79 +199,63 @@ def vraag_oordeel(client, beoordelaar: str, messages: list[dict]) -> tuple[dict,
 
 # --- hoofdroutine ----------------------------------------------------------------
 
-def _antwoord_van_run(run: dict, runs_dir: Path) -> tuple[str, str]:
-    pad = runs_dir / f"{tekst(run['Run-ID'])}.json"
-    if pad.exists():
-        try:
-            antwoord = antwoord_uit(json.loads(pad.read_text(encoding="utf-8")).get("response"))
-            if antwoord.strip():
-                return antwoord, str(pad)
-        except (OSError, ValueError):
-            pass
-    return str(run["Antwoord model"] or ""), "register"
+def selecteer_runs(sessie: Session, opties: BeoordeelOpties) -> tuple[list[Testrun], list[tuple[str, str]]]:
+    q = (select(Testrun).where(Testrun.verwijderd_op.is_(None))
+         .options(selectinload(Testrun.beoordelingen), selectinload(Testrun.testcase)).order_by(Testrun.run_id)
+         .execution_options(populate_existing=True))
+    if opties.run:
+        runs = list(sessie.scalars(q.where(Testrun.run_id.in_(opties.run))))
+        onbekend = sorted(set(opties.run) - {r.run_id for r in runs})
+        if onbekend:
+            raise UitvoerFout(f"Run-ID('s) niet gevonden of verwijderd: {', '.join(onbekend)}")
+    elif opties.modellen or opties.alle:
+        if opties.modellen:
+            q = q.where(Testrun.model_id.in_(opties.modellen))
+        runs = list(sessie.scalars(q))
+    else:
+        raise UitvoerFout("Kies wat er beoordeeld wordt: --alle, --model <Model-ID> of --run <Run-ID>")
+    if opties.versie:
+        runs = [r for r in runs if r.modelversie == opties.versie]
+    te_doen, overgeslagen = [], []
+    for run in runs:
+        if not (run.antwoord or "").strip():
+            overgeslagen.append((run.run_id, "geen antwoord"))
+        elif not (run.testcase.kernpunten or "").strip():
+            overgeslagen.append((run.run_id, "testcase zonder kernpunten"))
+        elif run.beoordeling(LLM) and not opties.opnieuw:
+            overgeslagen.append((run.run_id, "al door de LLM beoordeeld (gebruik --run … --opnieuw)"))
+        else:
+            te_doen.append(run)
+    return te_doen, overgeslagen
 
 
-def scores_leeg(run: dict) -> bool:
-    return all(tekst(run[k]) == "" for k in SCOREVELDEN)
-
-
-def beoordeel(register_pad: str | Path, opties: BeoordeelOpties, client, omg: Omgeving | None = None
-              ) -> BeoordeelResultaat:
+def beoordeel(sessie: Session, opties: BeoordeelOpties, client, omg: Omgeving | None = None) -> BeoordeelResultaat:
     omg = omg or Omgeving()
     say = omg.uitvoer
-    output = Path(omg.output_dir)
-    runs_dir, oordelen_dir = output / "runs", output / "beoordelingen"
     res = BeoordeelResultaat()
     if opties.opnieuw and not opties.run:
         raise UitvoerFout("--opnieuw kan alleen samen met --run")
-
-    reg = Register.laad(register_pad)
-    uitslag = valideer(reg, opties.model, opties.versie)
-    for w in uitslag.waarschuwingen:
-        say(f"Waarschuwing: {w}")
-    if not uitslag.ok:
-        raise UitvoerFout("Register bevat fouten:\n  - " + "\n  - ".join(uitslag.fouten))
 
     beoordelaar = opties.beoordelaar_model or os.getenv("ICTRECHT_JUDGE_MODEL")
     if not beoordelaar:
         raise UitvoerFout("Geen beoordelaarsmodel: gebruik --beoordelaar-model of zet ICTRECHT_JUDGE_MODEL in .env")
     beoordelaar = getattr(client, "resolve_model", lambda m: m)(beoordelaar)
-    getest = kp.laad_cache(omg.koppeling_pad).get(opties.model, {}).get("id")
-    if getest and getest == beoordelaar:
-        say(f"Waarschuwing: het beoordelaarsmodel is hetzelfde als het geteste model ({beoordelaar}).")
 
-    # Selectie
-    kandidaten = [r for r in reg.testruns if reg.model_van_run(r) == opties.model
-                  and tekst(r["Modelversie"]) == opties.versie and tekst(r["Run-ID"])]
-    if opties.run:
-        bekend = {tekst(r["Run-ID"]) for r in kandidaten}
-        onbekend = [r for r in opties.run if r not in bekend]
-        if onbekend:
-            raise UitvoerFout(f"Run-ID('s) niet gevonden voor {opties.model} {opties.versie}: {', '.join(onbekend)}")
-        kandidaten = [r for r in kandidaten if tekst(r["Run-ID"]) in opties.run]
-    te_doen = []
-    for run in kandidaten:
-        run_id = tekst(run["Run-ID"])
-        tc = reg.testcase(tekst(run["TC-ID"]))
-        if not tekst(run["Antwoord model"]):
-            res.overgeslagen.append((run_id, "geen antwoord"))
-        elif not opties.run and not scores_leeg(run):
-            res.overgeslagen.append((run_id, "al gescoord"))
-        elif not tekst(tc["Kernpunten verwacht antwoord"]):
-            res.overgeslagen.append((run_id, "testcase zonder kernpunten"))
-        elif (oordelen_dir / f"{run_id}.json").exists() and not opties.opnieuw:
-            res.overgeslagen.append((run_id, "al beoordeeld (gebruik --run … --opnieuw)"))
-        else:
-            te_doen.append((run, tc))
-    res.geselecteerd = [tekst(r["Run-ID"]) for r, _ in te_doen]
+    te_doen, res.overgeslagen = selecteer_runs(sessie, opties)
+    res.geselecteerd = [r.run_id for r in te_doen]
+    koppelingen = laad_koppelingen(sessie)
+    zelfde = sorted({r.model_id for r in te_doen if koppelingen.get(r.model_id, {}).get("id") == beoordelaar})
+    if zelfde:
+        say(f"Waarschuwing: het beoordelaarsmodel ({beoordelaar}) is hetzelfde als het geteste model voor "
+            f"{', '.join(zelfde)}.")
 
-    say(f"\nBeoordeling van {opties.model} {opties.versie} door {beoordelaar}: {len(te_doen)} run(s)")
+    say(f"\nBeoordeling door {beoordelaar}: {len(te_doen)} run(s)")
     for run_id, reden in res.overgeslagen:
         say(f"  overgeslagen: {run_id} ({reden})")
     if opties.dry_run:
-        for run, tc in te_doen:
-            say(f"  {tekst(run['Run-ID'])}  {tekst(tc['TC-ID']):<16} {tekst(tc['Testtype'])}")
-        say("\nDry-run: geen calls, niets geschreven.")
+        for run in te_doen:
+            say(f"  {run.run_id}  {run.tc_id:<16} {run.testcase.testtype:<7} {run.modelversie}")
+        say("\nDry-run: geen calls, niets opgeslagen.")
         return res
     if not te_doen:
         return res
@@ -282,63 +263,39 @@ def beoordeel(register_pad: str | Path, opties: BeoordeelOpties, client, omg: Om
     rubric = lees_rubric()
     verwacht = verwachtingen(rubric)
     systeem = systeemprompt(rubric)
-    oordelen_dir.mkdir(parents=True, exist_ok=True)
-    for run, tc in te_doen:
-        run_id = tekst(run["Run-ID"])
-        antwoord, bron = _antwoord_van_run(run, runs_dir)
+    for run in te_doen:
         messages = [{"role": "system", "content": systeem},
-                    {"role": "user", "content": gebruikersbericht(tc, antwoord, verwacht)}]
+                    {"role": "user", "content": gebruikersbericht(run.testcase, run.antwoord, verwacht)}]
         try:
             oordeel, ruw = vraag_oordeel(client, beoordelaar, messages)
         except Exception as e:  # noqa: BLE001 - per run melden en doorgaan
-            res.fouten.append((run_id, f"{type(e).__name__}: {e}"))
-            say(f"  ✗ {run_id}: {e}")
+            res.fouten.append((run.run_id, f"{type(e).__name__}: {e}"))
+            say(f"  ✗ {run.run_id}: {e}")
             continue
         waarschuwingen = []
-        if oordeel["ko"]["ko"] == "J" and not citaat_gevonden(oordeel["ko"]["citaat"], antwoord):
+        if oordeel["ko"]["ko"] == "J" and not citaat_gevonden(oordeel["ko"]["citaat"], run.antwoord):
             waarschuwingen.append("K.O.-citaat niet letterlijk in het antwoord gevonden")
         oordeel_eind = eindoordeel(oordeel["scores"], oordeel["ko"]["ko"])
-        pad = oordelen_dir / f"{run_id}.json"
-        if pad.exists():  # --opnieuw: vorig oordeel bewaren
-            pad.rename(pad.with_name(f"{run_id}.vorige-{dt.datetime.now():%Y%m%dT%H%M%S}.json"))
-        pad.write_text(json.dumps({
-            "run_id": run_id, "tc_id": tekst(tc["TC-ID"]), "model_id": opties.model, "modelversie": opties.versie,
-            "beoordelaar_model": beoordelaar, "tijdstip": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-            "antwoord_bron": bron, "oordeel": oordeel, "eindoordeel": oordeel_eind,
-            "waarschuwingen": waarschuwingen, "berichten": messages, "ruwe_antwoorden": ruw,
-        }, indent=2, ensure_ascii=False), encoding="utf-8")
+        vorige = run.beoordeling(LLM)
+        if vorige:  # --opnieuw: het vorige oordeel blijft bewaard, maar telt niet meer mee
+            vorige.verwijderd_op = nu()
+        b = Beoordeling(run_id=run.run_id, type=LLM, beoordelaar=beoordelaar, ko=oordeel["ko"]["ko"],
+                        ko_code=oordeel["ko"].get("code") or "", ko_citaat=oordeel["ko"].get("citaat") or "",
+                        toelichting=oordeel["toelichting"], te_verifieren=oordeel["te_verifieren"],
+                        kernpunten=oordeel["kernpunten"], eindoordeel=oordeel_eind, waarschuwingen=waarschuwingen,
+                        details={"berichten": messages, "ruwe_antwoorden": ruw,
+                                 "tijdstip": dt.datetime.now().astimezone().isoformat(timespec="seconds")})
+        b.zet_scores(oordeel["scores"])
+        sessie.add(b)
+        run.beoordelingen.append(b)
+        sessie.commit()
         res.beoordeeld.append({"run": run, "oordeel": oordeel, "eindoordeel": oordeel_eind})
         s = oordeel["scores"]
-        say(f"  ✓ {run_id} {tekst(tc['TC-ID']):<16} {oordeel_eind:<11} "
+        say(f"  ✓ {run.run_id} {run.tc_id:<16} {oordeel_eind:<11} "
             + " ".join(f"{d[:4]} {s[d]}" for d in DIMENSIES) + f"  K.O. {oordeel['ko']['ko']}"
             + "".join(f"  ! {w}" for w in waarschuwingen))
 
-    if opties.schrijf_in_register and res.beoordeeld:
-        geschreven = 0
-        for item in res.beoordeeld:
-            run, oordeel = item["run"], item["oordeel"]
-            if not scores_leeg(run):
-                say(f"  {tekst(run['Run-ID'])}: scorevelden in het register al gevuld; niet overschreven")
-                continue
-            for d in DIMENSIES:
-                reg.zet(run["rij"], d, oordeel["scores"][d])
-            reg.zet(run["rij"], "K.O.", oordeel["ko"]["ko"])
-            if oordeel["ko"]["ko"] == "J":
-                reg.zet(run["rij"], "K.O.-code", oordeel["ko"]["code"])
-            toelichting = oordeel["toelichting"].strip()
-            if oordeel["te_verifieren"]:
-                toelichting += ("\n" if toelichting else "") + "te verifiëren: " + "; ".join(oordeel["te_verifieren"])
-            reg.zet(run["rij"], "Toelichting", toelichting[:32000])
-            reg.zet(run["rij"], "Beoordelaar", beoordelaar)
-            reg.zet(run["rij"], "Type beoordelaar", "LLM")
-            geschreven += 1
-        if geschreven:
-            uit = Path(opties.uit) if opties.uit else volgende_uitvoerpad(reg.pad.parent, omg.vandaag or dt.date.today())
-            res.pad = reg.opslaan(uit)
-            say(f"\n{geschreven} beoordeling(en) in het register gezet: {res.pad}")
-
-    say(f"\n{len(res.beoordeeld)} beoordeeld (oordelen in {oordelen_dir})"
-        + (f", {len(res.fouten)} mislukt" if res.fouten else ""))
+    say(f"\n{len(res.beoordeeld)} beoordeeld" + (f", {len(res.fouten)} mislukt" if res.fouten else ""))
     for run_id, melding in res.fouten:
         say(f"  - {run_id}: {melding}")
     return res
