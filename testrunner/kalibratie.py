@@ -1,4 +1,8 @@
-"""`kalibratie`: LLM-beoordelingen vergelijken met die van de jurist (type mens), beide uit de database."""
+"""`kalibratie`: LLM-beoordelingen vergelijken met die van de jurist (type mens), beide uit de database.
+
+Alleen definitieve beoordelingen van de jurist tellen mee, en geen beoordelingen met werkwijze 'overgenomen'
+(gestart vanuit de LLM-scores): die zijn niet onafhankelijk en zouden de overeenstemming te hoog laten lijken.
+Werkwijze leeg (import, oude data) telt wel mee."""
 
 from __future__ import annotations
 
@@ -10,7 +14,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from db.models import DIMENSIES, LLM, MENS, Testrun
+from db.models import DIMENSIES, LLM, MENS, OVERGENOMEN, Testrun
 from register.eindoordeel import eindoordeel
 from register.werkmap import tekst
 from .uitvoeren import Omgeving
@@ -50,6 +54,7 @@ class Vergelijking:
 class KalibratieResultaat:
     vergelijkingen: list[Vergelijking] = field(default_factory=list)
     zonder_llm: list[str] = field(default_factory=list)
+    overgenomen: list[str] = field(default_factory=list)  # niet meegeteld: jurist startte vanuit de LLM-scores
     csv_pad: Path | None = None
 
     @property
@@ -94,8 +99,11 @@ def kalibreer(sessie: Session, modellen: list[str] | None = None, versie: str | 
     if versie:
         q = q.where(Testrun.modelversie == versie)
     for run in sessie.scalars(q):
-        mens_b = run.beoordeling(MENS)
+        mens_b = run.beoordeling(MENS, alleen_definitief=True)
         if not mens_b or any(v is None for v in mens_b.scores().values()):
+            continue
+        if mens_b.werkwijze == OVERGENOMEN:
+            res.overgenomen.append(run.run_id)
             continue
         llm_b = run.beoordeling(LLM)
         if not llm_b:
@@ -112,6 +120,8 @@ def kalibreer(sessie: Session, modellen: list[str] | None = None, versie: str | 
     # Rapport
     n = len(res.vergelijkingen)
     say(f"\nKalibratie {model} {versie}: {n} run(s) door mens én LLM beoordeeld")
+    if res.overgenomen:
+        say(f"  {len(res.overgenomen)} run(s) niet meegeteld: jurist startte vanuit de LLM-scores (niet blind)")
     if res.zonder_llm:
         say(f"  {len(res.zonder_llm)} door mens gescoorde run(s) zonder LLM-oordeel: {', '.join(res.zonder_llm)}")
     if not n:

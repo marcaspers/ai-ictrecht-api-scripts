@@ -27,6 +27,10 @@ if toegang():
         # Widgetwaarde apart bewaren: Streamlit ruimt widget-state op bij het wisselen van pagina.
         naam = st.text_input("Jouw naam (Beoordelaar / Opgesteld door)", value=st.session_state.gebruiker)
         st.session_state.gebruiker = naam
+        st.session_state.blind = st.toggle(
+            "Blind beoordelen (kalibratie)", value=st.session_state.get("blind", False),
+            help="Het LLM-oordeel blijft verborgen tot je definitief hebt gemaakt. Alleen blinde beoordelingen "
+                 "tellen mee voor de kalibratie; anders start je beoordeling als klad met de LLM-scores.")
     st.navigation([
         st.Page("paginas/beoordelen.py", title="Beoordelen", icon="⚖️", default=True),
         st.Page("paginas/testcases.py", title="Testcases", icon="📋"),

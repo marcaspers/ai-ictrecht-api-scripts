@@ -146,8 +146,8 @@ def test_selectie_versie_en_verwijderd(met_runs, omg):
 
 # --- kalibratie ----------------------------------------------------------------------
 
-def mens(s, run_id, scores, ko="N", code=""):
-    b = Beoordeling(run_id=run_id, type=MENS, beoordelaar="Jurist", ko=ko, ko_code=code)
+def mens(s, run_id, scores, ko="N", code="", **kw):
+    b = Beoordeling(run_id=run_id, type=MENS, beoordelaar="Jurist", ko=ko, ko_code=code, **kw)
     b.zet_scores(dict(zip(["Juistheid", "Volledigheid", "Bronnen", "Bruikbaarheid", "Gedrag"], scores)))
     s.add(b)
     s.commit()
@@ -173,3 +173,13 @@ def test_kalibratie_zonder_llm(met_runs, omg):
     mens(met_runs, "RUN-20261116-001", (3, 2, 2, 3, 3))
     res = kalibreer(met_runs, None, None, omg)
     assert res.zonder_llm == ["RUN-20261116-001"] and not res.vergelijkingen
+
+
+def test_kalibratie_alleen_definitief_en_niet_overgenomen(met_runs, omg):
+    beoordeel(met_runs, opties(), FakeClient(lambda *a: oordeel(scores=(3, 2, 2, 3, 3))), omg)
+    mens(met_runs, "RUN-20261116-001", (3, 2, 2, 3, 3), werkwijze="blind")
+    mens(met_runs, "RUN-20261116-002", (3, 2, 2, 3, 3), werkwijze="overgenomen")
+    mens(met_runs, "RUN-20261116-003", (1, 2, 2, 3, 3), status="klad")
+    res = kalibreer(met_runs, ["IE"], "v1.0", omg)
+    assert [v.run_id for v in res.vergelijkingen] == ["RUN-20261116-001"]
+    assert res.overgenomen == ["RUN-20261116-002"]

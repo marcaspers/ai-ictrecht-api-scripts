@@ -112,7 +112,7 @@ def exporteer(sessie: Session, uit: str | Path | None = None, modellen: list[str
         rij = {"Run-ID": r.run_id, "TC-ID": r.tc_id, "Modelversie": r.modelversie, "Datum": r.datum,
                "Uitgevoerd door": r.uitgevoerd_door, "Uitvoerwijze": r.uitvoerwijze, "Herhaling #": r.herhaling,
                "Antwoord model": afkappen(r.antwoord, r.run_id)}
-        b = r.beoordeling(MENS) or r.beoordeling(LLM)
+        b = r.beoordeling(MENS, alleen_definitief=True) or r.beoordeling(LLM, alleen_definitief=True)
         if b:
             rij.update({d: score_waarde(getattr(b, d.lower())) for d in DIMENSIES})
             toelichting = b.toelichting.strip()

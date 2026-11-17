@@ -20,6 +20,10 @@ MODEL_STATUSSEN = ["in ontwikkeling", "in test", "in gebruik", "uitgefaseerd"]
 SCORE_KEUZES = ["3", "2", "1", "0", "n.v.t."]
 KO_CODES = [f"K.O.{i}" for i in range(1, 6)]
 MENS, LLM = "mens", "LLM"
+KLAD, DEFINITIEF = "klad", "definitief"
+# Werkwijze van een jurist-beoordeling: blind = zonder de LLM-scores te zien (telt mee voor de kalibratie),
+# overgenomen = gestart vanuit de LLM-scores of gewijzigd na het zien ervan. Leeg = onbekend (import, oude data).
+BLIND, OVERGENOMEN = "blind", "overgenomen"
 
 
 def nu() -> dt.datetime:
@@ -132,9 +136,10 @@ class Testrun(Tijdstempels, Base):
     testcase: Mapped[Testcase] = relationship(back_populates="runs")
     beoordelingen: Mapped[list[Beoordeling]] = relationship(back_populates="run", order_by="Beoordeling.id")
 
-    def beoordeling(self, type_: str) -> Beoordeling | None:
-        """Laatste niet-verwijderde beoordeling van dit type (mens of LLM)."""
-        actief = [b for b in self.beoordelingen if b.type == type_ and not b.verwijderd]
+    def beoordeling(self, type_: str, alleen_definitief: bool = False) -> Beoordeling | None:
+        """Laatste niet-verwijderde beoordeling van dit type (mens of LLM); met ``alleen_definitief`` geen klad."""
+        actief = [b for b in self.beoordelingen if b.type == type_ and not b.verwijderd
+                  and (not alleen_definitief or b.definitief)]
         return actief[-1] if actief else None
 
 
@@ -160,8 +165,14 @@ class Beoordeling(Tijdstempels, Base):
     eindoordeel: Mapped[str] = mapped_column(String(12), default="")
     waarschuwingen: Mapped[list | None] = mapped_column(JSON)
     details: Mapped[dict | None] = mapped_column(JSON)          # berichten en ruwe antwoorden van de LLM
+    status: Mapped[str] = mapped_column(String(12), default=DEFINITIEF, server_default=DEFINITIEF)  # klad/definitief
+    werkwijze: Mapped[str] = mapped_column(String(12), default="", server_default="")  # blind/overgenomen/leeg
 
     run: Mapped[Testrun] = relationship(back_populates="beoordelingen")
+
+    @property
+    def definitief(self) -> bool:
+        return self.status != KLAD
 
     def scores(self) -> dict:
         """{'Juistheid': 2, ..., 'Gedrag': 'n.v.t.'} zoals in Excel."""

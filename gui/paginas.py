@@ -12,12 +12,12 @@ import streamlit as st
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from db.models import (KO_CODES, LLM, MENS, MODEL_STATUSSEN, SCORE_KEUZES, TC_STATUSSEN, TESTTYPES, Beoordeling,
-                       Model, Testcase, Testrun, nu)
+from db.models import (BLIND, DEFINITIEF, DIMENSIE_VELDEN, KLAD, KO_CODES, LLM, MENS, MODEL_STATUSSEN, OVERGENOMEN,
+                       SCORE_KEUZES, TC_STATUSSEN, TESTTYPES, Beoordeling, Model, Testcase, Testrun, nu, score_waarde)
 from db.opslag import (ALLEEN_GOEDGEKEURD, instelling, laad_koppelingen, volgende_run_id, volgende_tc_id,
                        zet_instelling)
 from db.sessie import open_sessie
-from register.eindoordeel import eindoordeel
+from register.eindoordeel import ONVOLDOENDE, TWIJFEL, VOLDOENDE, eindoordeel
 from testrunner.beoordelen import RUBRIC_PAD, verwachtingen
 
 
@@ -93,7 +93,81 @@ def rubric() -> tuple[str, dict[str, str]]:
     return tekst, verwachtingen(tekst)
 
 
+# --- beoordelingsstatus van een run (Beoordelen en Testruns) -----------------------
+
+ST_NIET, ST_LLM, ST_KLAD, ST_DEF, ST_AFWIJKING = ("⚪ niet beoordeeld", "🤖 alleen LLM", "✏️ klad jurist",
+                                                 "✅ definitief", "⚠️ jurist ≠ LLM")
+RUN_STATUSSEN = [ST_NIET, ST_LLM, ST_KLAD, ST_DEF, ST_AFWIJKING]
+
+
+def status_run(r: Testrun) -> str:
+    mens, llm = r.beoordeling(MENS), r.beoordeling(LLM)
+    if mens and mens.definitief:
+        if llm and llm.eindoordeel and mens.eindoordeel and llm.eindoordeel != mens.eindoordeel:
+            return ST_AFWIJKING
+        return ST_DEF
+    if mens:
+        return ST_KLAD
+    return ST_LLM if llm else ST_NIET
+
+
+def kort(b: Beoordeling | None) -> str:
+    """Scores compact, bijv. 'J2 V1 B3 U2 G–' (U = bruikbaarheid; – = n.v.t., · = leeg)."""
+    if not b:
+        return ""
+    tekens = {None: "·", "n.v.t.": "–"}
+    waarden = (getattr(b, v) for v in DIMENSIE_VELDEN.values())
+    return " ".join(f"{letter}{tekens.get(w, w)}" for letter, w in zip("JVBUG", waarden))
+
+
 # --- Beoordelen ------------------------------------------------------------------
+
+TOON_OPEN, TOON_ALLE = "Nog niet definitief door een jurist", "Alle runs"
+KOLOMMEN_SCORE = [2, 1, 5, 1]  # dimensie | LLM | jurist | verschil
+
+
+def blind() -> bool:
+    return bool(st.session_state.get("blind"))
+
+
+def bepaal_werkwijze(vorige: Beoordeling | None, llm_gezien: bool, velden: dict, ko: str, ko_code: str) -> str:
+    """Werkwijze van een nieuwe jurist-beoordeling. Ongewijzigde scores en K.O. houden de werkwijze van de vorige
+    versie (een typfout in de toelichting herstellen maakt een blinde beoordeling niet ineens 'overgenomen')."""
+    if vorige and all(getattr(vorige, v) == velden[v] for v in velden) and (vorige.ko, vorige.ko_code) == (ko, ko_code):
+        return vorige.werkwijze
+    if (vorige and vorige.werkwijze == OVERGENOMEN) or llm_gezien:
+        return OVERGENOMEN
+    return BLIND
+
+
+def _verschil(jurist: str | None, llm: str | None) -> str:
+    if jurist is None or llm is None or jurist == llm:
+        return ""
+    if "n.v.t." in (jurist, llm):
+        return ":orange[≠]"
+    return f":orange[{int(jurist) - int(llm):+d}]"
+
+
+def _toon_llm_oordeel(llm: Beoordeling, sleutel: str, vorige: Beoordeling | None) -> list[str]:
+    """Kernpunten, te verifiëren (als checklist) en toelichting van de LLM. Geeft de afgevinkte punten terug."""
+    st.markdown(f"**Oordeel LLM** ({llm.beoordelaar or 'LLM'})")
+    for kp in llm.kernpunten or []:
+        icoon = {"aanwezig": "✅", "deels": "🟡", "afwezig": "❌"}.get(kp.get("oordeel"), "•")
+        st.markdown(f"{icoon} kernpunt {kp.get('nr')}: **{kp.get('oordeel')}** — {kp.get('toelichting', '')}")
+    afgevinkt = []
+    if llm.te_verifieren:
+        st.markdown("**Te verifiëren** (vink af wat je hebt nagekeken)")
+        eerder = set((vorige.details or {}).get("geverifieerd", [])) if vorige else set()
+        for i, punt in enumerate(llm.te_verifieren):
+            if st.checkbox(punt, value=punt in eerder, key=f"{sleutel}-verif-{i}"):
+                afgevinkt.append(punt)
+    if llm.toelichting.strip():
+        st.markdown("**Toelichting LLM**")
+        st.text(llm.toelichting)
+    for w in llm.waarschuwingen or []:
+        st.caption(f"⚠ {w}")
+    return afgevinkt
+
 
 def pagina_beoordelen():
     st.title("Beoordelen")
@@ -101,23 +175,34 @@ def pagina_beoordelen():
         st.info("Vul links je naam in; die komt als Beoordelaar bij je scores.")
     rubric_tekst, verwacht = rubric()
     with open_sessie() as s:
-        runs = list(s.scalars(select(Testrun).where(Testrun.verwijderd_op.is_(None))
+        alle = list(s.scalars(select(Testrun).where(Testrun.verwijderd_op.is_(None))
                               .options(selectinload(Testrun.beoordelingen), selectinload(Testrun.testcase))
                               .order_by(Testrun.run_id)))
-        if not runs:
+        if not alle:
             st.info("Nog geen testruns. Draai eerst `python testregister.py run …`.")
             return
+        if "open_run" in st.session_state:  # vanuit Testruns: filters zo zetten dat deze run zichtbaar is
+            doel = next((r for r in alle if r.run_id == st.session_state.pop("open_run")), None)
+            if doel:
+                st.session_state.update(beo_model=doel.model_id, beo_versie="(alle)", beo_toon=TOON_ALLE,
+                                        run_id=doel.run_id)
+        modellen = sorted({r.model_id for r in alle})
+        if st.session_state.get("beo_model") not in modellen:
+            st.session_state.beo_model = modellen[0]
         k1, k2, k3 = st.columns([1, 1, 2])
-        model = k1.selectbox("Model", sorted({r.model_id for r in runs}))
-        runs = [r for r in runs if r.model_id == model]
-        versie = k2.selectbox("Versie", ["(alle)"] + sorted({r.modelversie for r in runs}))
+        model = k1.selectbox("Model", modellen, key="beo_model")
+        runs = [r for r in alle if r.model_id == model]
+        versies = ["(alle)"] + sorted({r.modelversie for r in runs})
+        if st.session_state.get("beo_versie") not in versies:
+            st.session_state.beo_versie = "(alle)"
+        versie = k2.selectbox("Versie", versies, key="beo_versie")
         if versie != "(alle)":
             runs = [r for r in runs if r.modelversie == versie]
-        filter_ = k3.radio("Toon", ["Nog niet door een jurist beoordeeld", "Alle runs"], horizontal=True)
-        if filter_.startswith("Nog"):
-            runs = [r for r in runs if not r.beoordeling(MENS)]
+        filter_ = k3.radio("Toon", [TOON_OPEN, TOON_ALLE], horizontal=True, key="beo_toon")
+        if filter_ == TOON_OPEN:
+            runs = [r for r in runs if not r.beoordeling(MENS, alleen_definitief=True)]
         if not runs:
-            st.success("Alle runs in deze selectie zijn door een jurist beoordeeld.")
+            st.success("Alle runs in deze selectie zijn definitief door een jurist beoordeeld.")
             return
 
         ids = [r.run_id for r in runs]
@@ -133,8 +218,8 @@ def pagina_beoordelen():
         if n3.button("Volgende →", disabled=i == len(ids) - 1, width="stretch"):
             st.session_state.ga_naar = ids[i + 1]
             st.rerun()
-        labels = {r.run_id: f"{r.run_id} · {r.tc_id} · {r.testcase.testtype} · {r.modelversie} #{r.herhaling}"
-                  for r in runs}
+        labels = {r.run_id: f"{status_run(r)} · {r.run_id} · {r.tc_id} · {r.testcase.testtype} · {r.modelversie} "
+                            f"#{r.herhaling}" for r in runs}
         n2.selectbox("Run", ids, key="run_id", format_func=labels.get, label_visibility="collapsed")
         run = next(r for r in runs if r.run_id == st.session_state.run_id)
         tc = run.testcase
@@ -144,7 +229,7 @@ def pagina_beoordelen():
         links, midden, rechts = st.columns(3)
         with links:
             st.subheader("Vraag")
-            with st.container(height=560):
+            with st.container(height=480):
                 st.markdown(f"**{tc.testtype}** — {verwacht.get(tc.testtype, '')}")
                 st.markdown("**Prompt**")
                 st.text(tc.prompt)
@@ -153,7 +238,7 @@ def pagina_beoordelen():
                     st.text(tc.context)
         with midden:
             st.subheader("Verwacht antwoord")
-            with st.container(height=560):
+            with st.container(height=480):
                 st.markdown("**Kernpunten**")
                 st.text(tc.kernpunten or "(geen kernpunten)")
                 st.markdown("**Verwacht gedrag**")
@@ -164,54 +249,117 @@ def pagina_beoordelen():
                     st.caption(f"Peildatum {tc.peildatum:%d-%m-%Y}")
         with rechts:
             st.subheader("Antwoord model")
-            with st.container(height=560):
+            with st.container(height=480):
                 st.markdown(run.antwoord or "_(leeg)_")
-
-        llm = run.beoordeling(LLM)
-        if llm:
-            with st.expander("Oordeel van de LLM-beoordelaar (voor de kalibratie eerst zelf scoren)"):
-                st.write({**llm.scores(), "K.O.": f"{llm.ko} {llm.ko_code}".strip(), "Eindoordeel": llm.eindoordeel})
-                st.text(llm.toelichting)
-                if llm.te_verifieren:
-                    st.markdown("**Te verifiëren:** " + "; ".join(llm.te_verifieren))
-                for kp in llm.kernpunten or []:
-                    st.markdown(f"- kernpunt {kp.get('nr')}: **{kp.get('oordeel')}** — {kp.get('toelichting', '')}")
         with st.expander("Rubric"):
             st.markdown(rubric_tekst)
 
-        vorige = run.beoordeling(MENS)
-        st.subheader("Jouw beoordeling" + (f" (bijwerken; nu door {vorige.beoordelaar})" if vorige else ""))
-        with st.form(f"beoordeling-{run.run_id}"):
-            kolommen = st.columns(5)
-            scores = {}
-            for kol, (d, veld) in zip(kolommen, [("Juistheid", "juistheid"), ("Volledigheid", "volledigheid"),
-                                                 ("Bronnen", "bronnen"), ("Bruikbaarheid", "bruikbaarheid"),
-                                                 ("Gedrag", "gedrag")]):
-                huidig = getattr(vorige, veld) if vorige else None
-                scores[d] = kol.radio(d, SCORE_KEUZES, index=SCORE_KEUZES.index(huidig) if huidig else None)
-            c1, c2 = st.columns([1, 3])
-            ko = c1.toggle("K.O.", value=bool(vorige and vorige.ko == "J"))
-            code = c2.selectbox("K.O.-code", [""] + KO_CODES,
-                                index=([""] + KO_CODES).index(vorige.ko_code) if vorige and vorige.ko_code in KO_CODES else 0)
-            toelichting = st.text_area("Toelichting", value=vorige.toelichting if vorige else "")
-            if st.form_submit_button("Opslaan", type="primary"):
-                if not gebruiker():
-                    st.error("Vul eerst links je naam in.")
-                elif ko and not code:
-                    st.error("Kies bij een K.O. de K.O.-code.")
-                else:
-                    if vorige:
-                        vorige.verwijderd_op = nu()
-                    b = Beoordeling(run_id=run.run_id, type=MENS, beoordelaar=gebruiker(), ko="J" if ko else "N",
-                                    ko_code=code if ko else "", toelichting=toelichting)
-                    b.zet_scores(scores)
-                    b.eindoordeel = eindoordeel(b.scores(), b.ko)
-                    s.add(b)
-                    s.commit()
-                    st.session_state.melding = f"{run.run_id} opgeslagen: {b.eindoordeel or 'nog niet alle scores ingevuld'}"
-                    if filter_.startswith("Nog") and i + 1 < len(ids):
-                        st.session_state.ga_naar = ids[i + 1]
-                    st.rerun()
+        # --- beoordeling: LLM en jurist naast elkaar ---
+        llm, vorige = run.beoordeling(LLM), run.beoordeling(MENS)
+        # Blind: LLM-oordeel pas tonen als de jurist definitief heeft gescoord.
+        llm_zichtbaar = llm is not None and not (blind() and not (vorige and vorige.definitief))
+        gezien = st.session_state.setdefault("llm_gezien", set())
+        if llm_zichtbaar:
+            gezien.add(run.run_id)
+        bron = vorige or (llm if llm_zichtbaar else None)  # waarmee het formulier start
+        sleutel = f"{run.run_id}-{'blind' if blind() else 'review'}"
+
+        titel = "Beoordeling"
+        if vorige:
+            titel += f" — {'definitief' if vorige.definitief else 'klad'} van {vorige.beoordelaar}"
+            if vorige.werkwijze:
+                titel += f" ({vorige.werkwijze})"
+        elif bron is llm and llm:
+            titel += " — klad overgenomen van de LLM"
+        st.subheader(titel)
+        if blind() and run.run_id in gezien and not (vorige and vorige.definitief):
+            st.warning("Je hebt het LLM-oordeel van deze run in deze sessie al gezien; je beoordeling telt daarom "
+                       "niet als blind. Zet Blind beoordelen aan vóórdat je een run opent.")
+        elif llm and not llm_zichtbaar:
+            st.info("Blind beoordelen: het LLM-oordeel verschijnt nadat je definitief hebt gemaakt. "
+                    "Zo telt je beoordeling mee voor de kalibratie.")
+        elif not llm:
+            st.caption("Nog geen LLM-oordeel voor deze run (`python testregister.py beoordeel …`).")
+
+        kop = st.columns(KOLOMMEN_SCORE)
+        kop[0].markdown("**Dimensie**")
+        kop[1].markdown("**LLM**")
+        kop[2].markdown("**Jurist**")
+        scores = {}
+        for d, veld in DIMENSIE_VELDEN.items():
+            rij = st.columns(KOLOMMEN_SCORE, vertical_alignment="center")
+            rij[0].markdown(d)
+            llm_w = getattr(llm, veld) if llm_zichtbaar else None
+            rij[1].markdown(llm_w or "–" if llm_zichtbaar else "🙈")
+            huidig = getattr(bron, veld) if bron else None
+            scores[veld] = rij[2].radio(d, SCORE_KEUZES, index=SCORE_KEUZES.index(huidig) if huidig else None,
+                                        horizontal=True, label_visibility="collapsed", key=f"{sleutel}-{veld}")
+            if llm_zichtbaar:
+                rij[3].markdown(_verschil(scores[veld], llm_w))
+        rij = st.columns(KOLOMMEN_SCORE, vertical_alignment="center")
+        rij[0].markdown("K.O.")
+        if llm_zichtbaar:
+            rij[1].markdown(f":red[J {llm.ko_code}]" if llm.ko == "J" else "N")
+        else:
+            rij[1].markdown("🙈")
+        ko_kol, code_kol = rij[2].columns([1, 3], vertical_alignment="center")
+        ko = ko_kol.toggle("K.O.", value=bool(bron and bron.ko == "J"), key=f"{sleutel}-ko")
+        codes = [""] + KO_CODES
+        code = code_kol.selectbox("K.O.-code", codes, label_visibility="collapsed",
+                                  index=codes.index(bron.ko_code) if bron and bron.ko_code in codes else 0,
+                                  key=f"{sleutel}-ko-code", disabled=not ko)
+        ko_jn, code = ("J", code) if ko else ("N", "")
+        if llm_zichtbaar and (ko_jn, code) != (llm.ko, llm.ko_code if llm.ko == "J" else ""):
+            rij[3].markdown(":orange[≠]")
+        eind = eindoordeel({d: score_waarde(scores[v]) for d, v in DIMENSIE_VELDEN.items()}, ko_jn)
+        rij = st.columns(KOLOMMEN_SCORE, vertical_alignment="center")
+        rij[0].markdown("**Eindoordeel**")
+        rij[1].markdown(llm.eindoordeel or "–" if llm_zichtbaar else "🙈")
+        rij[2].markdown(f"**{eind}**" if eind else "_nog niet alle scores ingevuld_")
+        if llm_zichtbaar and eind and llm.eindoordeel and eind != llm.eindoordeel:
+            rij[3].markdown(":orange[≠]")
+
+        links, rechts = st.columns(2)
+        with links:
+            afgevinkt = _toon_llm_oordeel(llm, sleutel, vorige) if llm_zichtbaar else []
+        with rechts:
+            toelichting = st.text_area("Jouw toelichting", value=vorige.toelichting if vorige else "", height=160,
+                                       key=f"{sleutel}-toelichting")
+
+        b1, b2, _ = st.columns([1, 1, 3])
+        klad = b1.button("Opslaan als klad", width="stretch")
+        definitief = b2.button("Definitief maken", type="primary", width="stretch")
+        if klad or definitief:
+            fout = None
+            if not gebruiker():
+                fout = "Vul eerst links je naam in."
+            elif definitief and any(v is None for v in scores.values()):
+                fout = "Vul voor definitief alle vijf scores in (of sla op als klad)."
+            elif definitief and ko and not code:
+                fout = "Kies bij een K.O. de K.O.-code."
+            if fout:
+                st.error(fout)
+            else:
+                werkwijze = bepaal_werkwijze(vorige, run.run_id in gezien, scores, ko_jn, code)
+                if vorige:
+                    vorige.verwijderd_op = nu()
+                b = Beoordeling(run_id=run.run_id, type=MENS, beoordelaar=gebruiker(), ko=ko_jn, ko_code=code,
+                                toelichting=toelichting, status=DEFINITIEF if definitief else KLAD,
+                                werkwijze=werkwijze, details={"geverifieerd": afgevinkt} if afgevinkt else None)
+                for veld, w in scores.items():
+                    setattr(b, veld, w)
+                b.eindoordeel = eindoordeel(b.scores(), b.ko)
+                s.add(b)
+                s.commit()
+                melding = f"{run.run_id} {'definitief' if definitief else 'als klad'} opgeslagen"
+                if b.eindoordeel:
+                    melding += f": {b.eindoordeel}"
+                if definitief and llm and not llm_zichtbaar:
+                    melding += f" · LLM gaf: {llm.eindoordeel or '–'}"
+                st.session_state.melding = melding
+                if definitief and filter_ == TOON_OPEN and i + 1 < len(ids):
+                    st.session_state.ga_naar = ids[i + 1]
+                st.rerun()
     if st.session_state.get("melding"):
         st.toast(st.session_state.pop("melding"))
 
@@ -296,37 +444,61 @@ def pagina_testcases():
 
 # --- Testruns -----------------------------------------------------------------------
 
+RUN_KOLOMMEN = ["Verwijderd", "Run-ID", "TC-ID", "Testtype", "Model-ID", "Modelversie", "Datum", "Herhaling #",
+                "Status", "Jurist", "Eindoordeel jurist", "LLM", "Eindoordeel LLM", "K.O.", "Uitgevoerd door", "Uitvoerwijze",
+                "Antwoord model"]
+
+
 def pagina_testruns():
     st.title("Testruns")
     with open_sessie() as s:
         alle = list(s.scalars(select(Testrun).options(selectinload(Testrun.beoordelingen),
                                                       selectinload(Testrun.testcase)).order_by(Testrun.run_id)))
-        k1, k2, k3 = st.columns([1, 1, 1])
+        k1, k2, k3, k4, k5 = st.columns([1, 1, 2, 1, 1])
         model = k1.selectbox("Model", ["(alle)"] + sorted({r.model_id for r in alle}))
         runs = [r for r in alle if model == "(alle)" or r.model_id == model]
         versie = k2.selectbox("Versie", ["(alle)"] + sorted({r.modelversie for r in runs}))
-        verwijderd = k3.toggle("Toon verwijderde")
-        runs = [r for r in runs if (versie == "(alle)" or r.modelversie == versie) and (verwijderd or not r.verwijderd)]
+        statussen = k3.multiselect("Status", RUN_STATUSSEN, placeholder="(alle)")
+        oordeel = k4.selectbox("Eindoordeel", ["(alle)", VOLDOENDE, TWIJFEL, ONVOLDOENDE],
+                               help="Van de jurist (definitief), anders van de LLM")
+        verwijderd = k5.toggle("Toon verwijderde")
 
-        def eind(r, t):
-            b = r.beoordeling(t)
+        def telt(r):
+            b = r.beoordeling(MENS, alleen_definitief=True) or r.beoordeling(LLM)
             return b.eindoordeel if b else ""
 
-        df = pd.DataFrame([{
-            "Verwijderd": r.verwijderd, "Run-ID": r.run_id, "TC-ID": r.tc_id, "Testtype": r.testcase.testtype,
-            "Model-ID": r.model_id, "Modelversie": r.modelversie, "Datum": r.datum,
-            "Uitgevoerd door": r.uitgevoerd_door, "Uitvoerwijze": r.uitvoerwijze, "Herhaling #": r.herhaling,
-            "Eindoordeel jurist": eind(r, MENS), "Eindoordeel LLM": eind(r, LLM),
-            "Antwoord model": (r.antwoord or "")[:300]} for r in runs],
-            columns=["Verwijderd", "Run-ID", "TC-ID", "Testtype", "Model-ID", "Modelversie", "Datum", "Uitgevoerd door",
-                     "Uitvoerwijze", "Herhaling #", "Eindoordeel jurist", "Eindoordeel LLM", "Antwoord model"])
+        runs = [r for r in runs if (versie == "(alle)" or r.modelversie == versie) and (verwijderd or not r.verwijderd)
+                and (not statussen or status_run(r) in statussen) and (oordeel == "(alle)" or telt(r) == oordeel)]
+
+        def ko(r):
+            paren = (("jurist", r.beoordeling(MENS)), ("LLM", r.beoordeling(LLM)))
+            delen = [f"{wie} {b.ko_code or 'J'}" for wie, b in paren if b and b.ko == "J"]
+            return "⛔ " + "; ".join(delen) if delen else ""
+
+        rijen = []
+        for r in runs:
+            mens, llm = r.beoordeling(MENS), r.beoordeling(LLM)
+            rijen.append({
+                "Verwijderd": r.verwijderd, "Run-ID": r.run_id, "TC-ID": r.tc_id, "Testtype": r.testcase.testtype,
+                "Model-ID": r.model_id, "Modelversie": r.modelversie, "Datum": r.datum, "Herhaling #": r.herhaling,
+                "Status": status_run(r), "Jurist": kort(mens), "Eindoordeel jurist": mens.eindoordeel if mens else "",
+                "LLM": kort(llm), "Eindoordeel LLM": llm.eindoordeel if llm else "", "K.O.": ko(r),
+                "Uitgevoerd door": r.uitgevoerd_door, "Uitvoerwijze": r.uitvoerwijze,
+                "Antwoord model": (r.antwoord or "")[:300]})
+        df = pd.DataFrame(rijen, columns=RUN_KOLOMMEN)
         bewerkt = st.data_editor(
-            df, hide_index=True, width="stretch", height=480, key=f"runs-{model}-{versie}-{verwijderd}",
+            df, hide_index=True, width="stretch", height=480,
+            key=f"runs-{model}-{versie}-{statussen}-{oordeel}-{verwijderd}",
             disabled=[c for c in df.columns if c not in ("Verwijderd", "Modelversie", "Uitgevoerd door")],
             column_config={"Verwijderd": st.column_config.CheckboxColumn(width="small"),
                            "Datum": st.column_config.DateColumn(format="DD-MM-YYYY"),
+                           "Herhaling #": st.column_config.NumberColumn(width="small"),
+                           "Jurist": st.column_config.TextColumn(help="J(uistheid) V(olledigheid) B(ronnen) "
+                                                                 "U (bruikbaarheid) G(edrag); – = n.v.t."),
+                           "LLM": st.column_config.TextColumn(help="Scores van de LLM-beoordelaar, zelfde volgorde"),
                            "Antwoord model": st.column_config.TextColumn(width="large")})
-        st.caption(f"{len(runs)} run(s). Antwoord ingekort; het volledige antwoord staat bij Details en Beoordelen.")
+        st.caption(f"{len(runs)} run(s). Antwoord ingekort; het volledige antwoord staat bij Details en Beoordelen. "
+                   "Een klad van de jurist telt nog niet mee in Overzicht, kalibratie en export.")
         if st.button("Wijzigingen opslaan", type="primary"):
             n = bewaar_wijzigingen(s, {r.run_id: r for r in runs}, df, bewerkt, "Run-ID",
                                    {"Modelversie": "modelversie", "Uitgevoerd door": "uitgevoerd_door"})
@@ -336,13 +508,19 @@ def pagina_testruns():
         if runs:
             with st.expander("Details van een run"):
                 r = next(x for x in runs if x.run_id == st.selectbox("Run", [x.run_id for x in runs]))
-                st.markdown(f"**{r.run_id}** · {r.tc_id} · {r.model_id} {r.modelversie} · API-model `{r.api_model or '–'}`"
+                k1, k2 = st.columns([4, 1])
+                k1.markdown(f"**{r.run_id}** · {r.tc_id} · {r.model_id} {r.modelversie} · "
+                            f"API-model `{r.api_model or '–'}`"
                             + (f" · {r.duur_s:.1f} s" if r.duur_s else ""))
+                if k2.button("Openen in Beoordelen", disabled=r.verwijderd, width="stretch"):
+                    st.session_state.open_run = r.run_id
+                    st.switch_page("paginas/beoordelen.py")
                 st.markdown(r.antwoord)
                 bs = [b for b in r.beoordelingen]
                 if bs:
                     st.markdown("**Beoordelingen** (verwijderde zijn eerdere versies)")
-                    st.dataframe(pd.DataFrame([{"Type": b.type, "Beoordelaar": b.beoordelaar, **b.scores(), "K.O.": b.ko,
+                    st.dataframe(pd.DataFrame([{"Type": b.type, "Beoordelaar": b.beoordelaar, "Status": b.status,
+                                                "Werkwijze": b.werkwijze, **b.scores(), "K.O.": b.ko,
                                                 "K.O.-code": b.ko_code, "Eindoordeel": b.eindoordeel,
                                                 "Toelichting": b.toelichting, "Verwijderd": b.verwijderd,
                                                 "Tijdstip": b.aangemaakt_op} for b in bs]), hide_index=True)
@@ -434,7 +612,8 @@ def pagina_modellen():
 
 def pagina_overzicht():
     st.title("Overzicht")
-    st.caption("Per modelversie: eindoordeel van de jurist, anders van de LLM-beoordelaar.")
+    st.caption("Per modelversie: eindoordeel van de jurist (definitief), anders van de LLM-beoordelaar. "
+               "Kalibratie: alleen runs die de jurist blind (zonder de LLM-scores) definitief beoordeelde.")
     with open_sessie() as s:
         runs = list(s.scalars(select(Testrun).where(Testrun.verwijderd_op.is_(None))
                               .options(selectinload(Testrun.beoordelingen), selectinload(Testrun.testcase))))
@@ -443,15 +622,16 @@ def pagina_overzicht():
             sleutel = (r.model_id, r.modelversie)
             rij = rijen.setdefault(sleutel, Counter())
             rij["Runs"] += 1
-            mens, llm = r.beoordeling(MENS), r.beoordeling(LLM)
+            mens, llm = r.beoordeling(MENS, alleen_definitief=True), r.beoordeling(LLM)
             rij["Door jurist"] += bool(mens)
+            rij["Klad jurist"] += bool(not mens and r.beoordeling(MENS))
             rij["Door LLM"] += bool(llm)
             b = mens or llm
             if b and b.eindoordeel:
                 rij[b.eindoordeel] += 1
                 if b.ko == "J":
                     rij["K.O."] += 1
-            if mens and llm and mens.eindoordeel and llm.eindoordeel:
+            if mens and llm and mens.eindoordeel and llm.eindoordeel and mens.werkwijze != OVERGENOMEN:
                 rij["Kalibratie n"] += 1
                 rij["Kalibratie gelijk"] += mens.eindoordeel == llm.eindoordeel
         if not rijen:
@@ -461,9 +641,11 @@ def pagina_overzicht():
         for (m, v), c in sorted(rijen.items()):
             beoordeeld = c["Voldoende"] + c["Twijfel"] + c["Onvoldoende"]
             tabel.append({"Model-ID": m, "Versie": v, "Runs": c["Runs"], "Door jurist": c["Door jurist"],
+                          "Klad jurist": c["Klad jurist"],
                           "Door LLM": c["Door LLM"], "Voldoende": c["Voldoende"], "Twijfel": c["Twijfel"],
                           "Onvoldoende": c["Onvoldoende"], "K.O.": c["K.O."],
                           "% voldoende": round(100 * c["Voldoende"] / beoordeeld) if beoordeeld else None,
+                          "Kalibratie n": c["Kalibratie n"],
                           "Kalibratie (% gelijk)": round(100 * c["Kalibratie gelijk"] / c["Kalibratie n"])
                           if c["Kalibratie n"] else None})
         st.dataframe(pd.DataFrame(tabel), hide_index=True, width="stretch")

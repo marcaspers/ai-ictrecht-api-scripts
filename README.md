@@ -197,17 +197,26 @@ de payload, de ruwe respons (met bronnen) en de duur. Ctrl-C verliest dus niets.
 
 **kalibratie** vergelijkt per run de beoordeling van de jurist met die van de LLM: % gelijk eindoordeel
 (doel ≥ 80%), gemiste K.O.'s (doel 0), verschil per dimensie en de afwijkende runs. De uitkomst komt ook
-als CSV in `output/`.
+als CSV in `output/`. Alleen definitieve beoordelingen van de jurist tellen mee, en geen beoordelingen die
+vanuit de LLM-scores zijn gestart (werkwijze *overgenomen*): die zijn niet onafhankelijk.
 
 ### Beheerscherm
 
 - **Beoordelen**: per run staan de vraag, het verwachte antwoord (kernpunten, gedrag, bronnen) en het
-  antwoord van het model naast elkaar. Daaronder vul je de scores, K.O. en toelichting in. Standaard zie je
-  alleen runs die nog niet door een jurist zijn beoordeeld, en na opslaan ga je door naar de volgende.
-  Het oordeel van de LLM zit dichtgeklapt, zodat je eerst zelf scoort. Je naam vul je links in.
+  antwoord van het model naast elkaar. Daaronder staat per dimensie de score van de LLM naast die van de
+  jurist, met het verschil en het eindoordeel dat meerekent. Daarnaast de kernpunten, de te verifiëren
+  punten (af te vinken) en de toelichting van de LLM. Je naam vul je links in.
+  - *Review* (standaard): je beoordeling start als klad met de scores van de LLM; pas aan en kies
+    **Opslaan als klad** of **Definitief maken**. Telt niet mee voor de kalibratie.
+  - *Blind beoordelen* (schakelaar links): het LLM-oordeel blijft verborgen tot je definitief maakt. Zet de
+    schakelaar aan vóórdat je runs opent; een run waarvan je het LLM-oordeel al zag, telt niet als blind.
+  Standaard zie je alleen runs die nog niet definitief zijn; na definitief maken ga je door naar de volgende.
+  Een klad telt nog niet mee in Overzicht, kalibratie en export.
 - **Testcases**, **Testruns**, **Modellen**: tabellen die je bewerkt zoals in Excel. *Verwijderd* aanvinken is
   een soft delete; terughalen kan via *Toon verwijderde*. Een nieuwe testcase krijgt automatisch het volgende
   TC-ID. Een handmatige run (een antwoord uit de OpenWebUI-interface) kun je bij Testruns toevoegen.
+  Testruns toont per run de beoordelingsstatus, de scores van jurist en LLM (`J2 V1 B3 U2 G–`), de eindoordelen
+  en K.O.'s, met filters op status en eindoordeel; bij *Details* open je een run direct in Beoordelen.
 - **Overzicht**: per modelversie het aantal runs, het aantal beoordelingen, de eindoordelen en de
   kalibratie.
 

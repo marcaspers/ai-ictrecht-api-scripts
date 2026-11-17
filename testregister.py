@@ -23,7 +23,7 @@ from pathlib import Path
 
 from sqlalchemy import func, select
 
-from db.models import LLM, MENS, Beoordeling, Model, Testcase, Testrun
+from db.models import KLAD, LLM, MENS, Beoordeling, Model, Testcase, Testrun
 from db.opslag import (ALLEEN_GOEDGEKEURD, bewaar_koppelingen, importeer_koppelingbestand, instelling,
                        kies_versie, laad_koppelingen, modelregels, zet_instelling)
 from db.sessie import DatabaseFout, database_url, init_db, open_sessie, veilige_url
@@ -92,7 +92,9 @@ def cmd_info(args) -> int:
         tcs_per_model = Counter(t.model_id for t in tcs)
         runs_per = Counter((r.model_id, r.modelversie) for r in runs)
         beoordeeld = Counter(s.execute(select(Beoordeling.type, func.count()).where(
-            Beoordeling.verwijderd_op.is_(None)).group_by(Beoordeling.type)).all())
+            Beoordeling.verwijderd_op.is_(None), Beoordeling.status != KLAD).group_by(Beoordeling.type)).all())
+        klad = s.scalar(select(func.count()).select_from(Beoordeling).where(
+            Beoordeling.verwijderd_op.is_(None), Beoordeling.status == KLAD))
 
         print(f"\nModellen ({len(modellen)} regels)")
         print(f"  {'Model-ID':<10} {'Versie':<8} {'Status':<16} {'Cases':>5} {'Runs':>5}  OpenWebUI-id")
@@ -113,7 +115,8 @@ def cmd_info(args) -> int:
         ag = instelling(s, ALLEEN_GOEDGEKEURD)
         print(f"  instelling alleen-goedgekeurd: {ag} → run selecteert standaard "
               f"{'alleen goedgekeurd' if ag != 'N' else 'goedgekeurd + concept'}")
-        print(f"\nTestruns: {len(runs)}; beoordelingen: mens {beoordeeld.get(MENS, 0)}, LLM {beoordeeld.get(LLM, 0)}")
+        print(f"\nTestruns: {len(runs)}; beoordelingen: mens {beoordeeld.get(MENS, 0)}, LLM {beoordeeld.get(LLM, 0)}"
+              + (f", klad {klad}" if klad else ""))
 
         waarschuwingen = []
         zonder_kp = [t.tc_id for t in tcs if not t.kernpunten.strip() and t.status != "vervallen"]
