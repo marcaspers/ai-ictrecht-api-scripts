@@ -183,3 +183,26 @@ def test_kalibratie_alleen_definitief_en_niet_overgenomen(met_runs, omg):
     res = kalibreer(met_runs, ["IE"], "v1.0", omg)
     assert [v.run_id for v in res.vergelijkingen] == ["RUN-20261116-001"]
     assert res.overgenomen == ["RUN-20261116-002"]
+
+
+# --- tokens --------------------------------------------------------------------
+
+def test_tokens_uit_usage():
+    from db.models import tel_tokens, tokens_uit
+    assert tokens_uit(None) is None
+    assert tokens_uit({"prompt_tokens": 10, "completion_tokens": 5}) == {"in": 10, "uit": 5, "totaal": 15,
+                                                                         "redenering": 0}
+    t = tokens_uit({"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
+                    "completion_tokens_details": {"reasoning_tokens": 3}})
+    assert t["redenering"] == 3
+    assert tel_tokens(t, None, t) == {"in": 20, "uit": 10, "totaal": 30, "redenering": 6}
+    assert tel_tokens(None) is None
+
+
+def test_tokens_van_run_en_beoordelaar_incl_herkansing(met_runs):
+    antwoorden = iter(["geen json", oordeel()])
+    client = FakeClient(lambda m, model, t: next(antwoorden))
+    beoordeel(met_runs, opties(run=["RUN-20261116-001"]), client)
+    run = met_runs.scalar(select(Testrun).where(Testrun.run_id == "RUN-20261116-001"))
+    assert run.tokens == {"in": 100, "uit": 20, "totaal": 120, "redenering": 5}
+    assert run.beoordeling(LLM).tokens["totaal"] == 240  # twee calls: eerste ongeldig, dan herkansing

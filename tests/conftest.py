@@ -42,7 +42,9 @@ class FakeClient:
         if isinstance(uit, dict):
             return uit
         return {"id": "x", "choices": [{"message": {"role": "assistant", "content": uit}}],
-                "sources": [{"source": {"name": "kennisbank"}}]}
+                "sources": [{"source": {"name": "kennisbank"}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
+                          "completion_tokens_details": {"reasoning_tokens": 5}}}
 
 
 @pytest.fixture
