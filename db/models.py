@@ -48,6 +48,28 @@ def score_tekst(v) -> str | None:
     return str(int(n))
 
 
+def tokens_uit(usage) -> dict[str, int] | None:
+    """Tokengebruik uit een OpenAI-achtig ``usage``-blok: {'in', 'uit', 'totaal', 'redenering'}; None als het ontbreekt."""
+    if not isinstance(usage, dict):
+        return None
+
+    def getal(v) -> int:
+        return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+    t_in, t_uit = getal(usage.get("prompt_tokens")), getal(usage.get("completion_tokens"))
+    details = usage.get("completion_tokens_details")
+    return {"in": t_in, "uit": t_uit, "totaal": getal(usage.get("total_tokens")) or t_in + t_uit,
+            "redenering": getal(details.get("reasoning_tokens")) if isinstance(details, dict) else 0}
+
+
+def tel_tokens(*delen: dict | None) -> dict[str, int] | None:
+    """Tel tokenregisters (zoals van ``tokens_uit``) op; None als er geen enkele is."""
+    delen = [d for d in delen if d]
+    if not delen:
+        return None
+    return {k: sum(d.get(k, 0) for d in delen) for k in ("in", "uit", "totaal", "redenering")}
+
+
 class Base(DeclarativeBase):
     type_annotation_map = {dict: JSON, list: JSON}
 
@@ -136,6 +158,11 @@ class Testrun(Tijdstempels, Base):
     testcase: Mapped[Testcase] = relationship(back_populates="runs")
     beoordelingen: Mapped[list[Beoordeling]] = relationship(back_populates="run", order_by="Beoordeling.id")
 
+    @property
+    def tokens(self) -> dict[str, int] | None:
+        """Tokengebruik van de API-call (uit de bewaarde respons); None bij handmatige of geïmporteerde runs."""
+        return tokens_uit((self.response or {}).get("usage")) if isinstance(self.response, dict) else None
+
     def beoordeling(self, type_: str, alleen_definitief: bool = False) -> Beoordeling | None:
         """Laatste niet-verwijderde beoordeling van dit type (mens of LLM); met ``alleen_definitief`` geen klad."""
         actief = [b for b in self.beoordelingen if b.type == type_ and not b.verwijderd
@@ -173,6 +200,12 @@ class Beoordeling(Tijdstempels, Base):
     @property
     def definitief(self) -> bool:
         return self.status != KLAD
+
+    @property
+    def tokens(self) -> dict[str, int] | None:
+        """Tokengebruik van de LLM-beoordelaar (alle pogingen samen); None bij een jurist of oude beoordelingen."""
+        return tel_tokens(*(tokens_uit(u) for u in (self.details or {}).get("usage") or [])) \
+            if isinstance(self.details, dict) else None
 
     def scores(self) -> dict:
         """{'Juistheid': 2, ..., 'Gedrag': 'n.v.t.'} zoals in Excel."""

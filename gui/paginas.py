@@ -13,7 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from db.models import (BLIND, DEFINITIEF, DIMENSIE_VELDEN, KLAD, KO_CODES, LLM, MENS, MODEL_STATUSSEN, OVERGENOMEN,
-                       SCORE_KEUZES, TC_STATUSSEN, TESTTYPES, Beoordeling, Model, Testcase, Testrun, nu, score_waarde)
+                       SCORE_KEUZES, TC_STATUSSEN, TESTTYPES, Beoordeling, Model, Testcase, Testrun, nu, score_waarde,
+                       tel_tokens)
 from db.opslag import (ALLEEN_GOEDGEKEURD, instelling, laad_koppelingen, volgende_run_id, volgende_tc_id,
                        zet_instelling)
 from db.sessie import open_sessie
@@ -124,6 +125,14 @@ def kort(b: Beoordeling | None) -> str:
 
 TOON_OPEN, TOON_ALLE = "Nog niet definitief door een jurist", "Alle runs"
 KOLOMMEN_SCORE = [2, 1, 5, 1]  # dimensie | LLM | jurist | verschil
+
+
+def tokens_tekst(t: dict | None) -> str:
+    """'1.445 in · 122 uit (0 redenering)' of '' als het tokengebruik onbekend is."""
+    if not t:
+        return ""
+    tekst = f"{t['in']:,} in · {t['uit']:,} uit".replace(",", ".")
+    return tekst + (f" (waarvan {t['redenering']:,} redenering)".replace(",", ".") if t["redenering"] else "")
 
 
 def blind() -> bool:
@@ -248,9 +257,14 @@ def pagina_beoordelen():
                 if tc.peildatum:
                     st.caption(f"Peildatum {tc.peildatum:%d-%m-%Y}")
         with rechts:
-            st.subheader("Antwoord model")
+            modelregel = s.scalar(select(Model).where(Model.model_id == run.model_id, Model.versie == run.modelversie,
+                                                      Model.verwijderd_op.is_(None)))
+            modelnaam = (modelregel.naam if modelregel else "").strip() or run.model_id
+            st.subheader(f"Antwoord {modelnaam} {run.modelversie}".strip())
             with st.container(height=480):
                 st.markdown(run.antwoord or "_(leeg)_")
+            if run.tokens:
+                st.caption(f"Tokens: {tokens_tekst(run.tokens)}")
         with st.expander("Rubric"):
             st.markdown(rubric_tekst)
 
@@ -445,8 +459,8 @@ def pagina_testcases():
 # --- Testruns -----------------------------------------------------------------------
 
 RUN_KOLOMMEN = ["Verwijderd", "Run-ID", "TC-ID", "Testtype", "Model-ID", "Modelversie", "Datum", "Herhaling #",
-                "Status", "Jurist", "Eindoordeel jurist", "LLM", "Eindoordeel LLM", "K.O.", "Uitgevoerd door", "Uitvoerwijze",
-                "Antwoord model"]
+                "Status", "Jurist", "Eindoordeel jurist", "LLM", "Eindoordeel LLM", "K.O.", "Tokens", "Tokens LLM",
+                "Uitgevoerd door", "Uitvoerwijze", "Antwoord model"]
 
 
 def pagina_testruns():
@@ -483,6 +497,7 @@ def pagina_testruns():
                 "Model-ID": r.model_id, "Modelversie": r.modelversie, "Datum": r.datum, "Herhaling #": r.herhaling,
                 "Status": status_run(r), "Jurist": kort(mens), "Eindoordeel jurist": mens.eindoordeel if mens else "",
                 "LLM": kort(llm), "Eindoordeel LLM": llm.eindoordeel if llm else "", "K.O.": ko(r),
+                "Tokens": (r.tokens or {}).get("totaal"), "Tokens LLM": ((llm.tokens if llm else None) or {}).get("totaal"),
                 "Uitgevoerd door": r.uitgevoerd_door, "Uitvoerwijze": r.uitvoerwijze,
                 "Antwoord model": (r.antwoord or "")[:300]})
         df = pd.DataFrame(rijen, columns=RUN_KOLOMMEN)
@@ -496,6 +511,10 @@ def pagina_testruns():
                            "Jurist": st.column_config.TextColumn(help="J(uistheid) V(olledigheid) B(ronnen) "
                                                                  "U (bruikbaarheid) G(edrag); – = n.v.t."),
                            "LLM": st.column_config.TextColumn(help="Scores van de LLM-beoordelaar, zelfde volgorde"),
+                           "Tokens": st.column_config.NumberColumn(help="Totaal tokens (in + uit) van de API-call; "
+                                                                   "leeg bij handmatige of geïmporteerde runs"),
+                           "Tokens LLM": st.column_config.NumberColumn(help="Totaal tokens van de LLM-beoordelaar "
+                                                                       "(incl. herkansing)"),
                            "Antwoord model": st.column_config.TextColumn(width="large")})
         st.caption(f"{len(runs)} run(s). Antwoord ingekort; het volledige antwoord staat bij Details en Beoordelen. "
                    "Een klad van de jurist telt nog niet mee in Overzicht, kalibratie en export.")
@@ -511,7 +530,8 @@ def pagina_testruns():
                 k1, k2 = st.columns([4, 1])
                 k1.markdown(f"**{r.run_id}** · {r.tc_id} · {r.model_id} {r.modelversie} · "
                             f"API-model `{r.api_model or '–'}`"
-                            + (f" · {r.duur_s:.1f} s" if r.duur_s else ""))
+                            + (f" · {r.duur_s:.1f} s" if r.duur_s else "")
+                            + (f" · tokens {tokens_tekst(r.tokens)}" if r.tokens else ""))
                 if k2.button("Openen in Beoordelen", disabled=r.verwijderd, width="stretch"):
                     st.session_state.open_run = r.run_id
                     st.switch_page("paginas/beoordelen.py")
@@ -522,6 +542,7 @@ def pagina_testruns():
                     st.dataframe(pd.DataFrame([{"Type": b.type, "Beoordelaar": b.beoordelaar, "Status": b.status,
                                                 "Werkwijze": b.werkwijze, **b.scores(), "K.O.": b.ko,
                                                 "K.O.-code": b.ko_code, "Eindoordeel": b.eindoordeel,
+                                                "Tokens": (b.tokens or {}).get("totaal"),
                                                 "Toelichting": b.toelichting, "Verwijderd": b.verwijderd,
                                                 "Tijdstip": b.aangemaakt_op} for b in bs]), hide_index=True)
                 if r.response:
@@ -649,3 +670,45 @@ def pagina_overzicht():
                           "Kalibratie (% gelijk)": round(100 * c["Kalibratie gelijk"] / c["Kalibratie n"])
                           if c["Kalibratie n"] else None})
         st.dataframe(pd.DataFrame(tabel), hide_index=True, width="stretch")
+        tokens_per_dag(s)
+
+
+def lokale_datum(t: dt.datetime | None) -> dt.date | None:
+    if t is None:
+        return None
+    return (t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)).astimezone().date()
+
+
+def tokens_per_dag(s) -> None:
+    """Tokengebruik per dag: testruns (op rundatum) en LLM-beoordelingen (op tijdstip van beoordelen).
+    Verwijderde runs en vervangen beoordelingen tellen mee: die calls zijn wel gedaan."""
+    st.subheader("Tokens per dag")
+    dagen: dict[dt.date, dict] = {}
+
+    def tel(dag, soort, t):
+        if dag is None or not t:
+            return
+        rij = dagen.setdefault(dag, {"runs": [], "llm": [], "n_runs": 0, "n_llm": 0})
+        rij[soort].append(t)
+        rij[f"n_{soort}"] += 1
+
+    for r in s.scalars(select(Testrun).where(Testrun.response.is_not(None))):
+        tel(lokale_datum(r.start) or r.datum, "runs", r.tokens)
+    for b in s.scalars(select(Beoordeling).where(Beoordeling.type == LLM)):
+        tel(lokale_datum(b.aangemaakt_op), "llm", b.tokens)
+    if not dagen:
+        st.caption("Nog geen tokengebruik bekend (alleen API-runs en LLM-beoordelingen hebben tokens).")
+        return
+    tabel = []
+    for dag, rij in sorted(dagen.items(), reverse=True):
+        runs, llm = tel_tokens(*rij["runs"]) or {}, tel_tokens(*rij["llm"]) or {}
+        tabel.append({"Datum": dag, "API-runs": rij["n_runs"], "Tokens in (runs)": runs.get("in", 0),
+                      "Tokens uit (runs)": runs.get("uit", 0), "Beoordelingen LLM": rij["n_llm"],
+                      "Tokens in (LLM)": llm.get("in", 0), "Tokens uit (LLM)": llm.get("uit", 0),
+                      "Totaal": runs.get("totaal", 0) + llm.get("totaal", 0)})
+    df = pd.DataFrame(tabel)
+    st.dataframe(df, hide_index=True, width="stretch",
+                 column_config={"Datum": st.column_config.DateColumn(format="DD-MM-YYYY")})
+    st.caption(f"Totaal {int(df['Totaal'].sum()):,} tokens. ".replace(",", ".")
+               + "Uit = antwoord incl. redeneertokens. Verwijderde runs en vervangen LLM-oordelen tellen mee, "
+               "want die calls zijn wel gedaan. LLM-beoordelingen van vóór deze versie hebben geen tokens.")

@@ -178,12 +178,17 @@ def citaat_gevonden(citaat: str, antwoord: str) -> bool:
     return _normaliseer(citaat.strip(" \"'….")) in _normaliseer(antwoord)
 
 
-def vraag_oordeel(client, beoordelaar: str, messages: list[dict]) -> tuple[dict, list[str]]:
-    """Eén call, bij ongeldige uitvoer één herkansing. Geeft (oordeel, ruwe antwoorden)."""
+def vraag_oordeel(client, beoordelaar: str, messages: list[dict], verbruik: list | None = None
+                  ) -> tuple[dict, list[str]]:
+    """Eén call, bij ongeldige uitvoer één herkansing. Geeft (oordeel, ruwe antwoorden).
+    Het ``usage``-blok van elke call wordt aan ``verbruik`` toegevoegd (voor het tokengebruik)."""
     ruw = []
     berichten = list(messages)
     for poging in range(2):
-        antwoord = antwoord_uit(client.chat(berichten, model=beoordelaar, temperature=0))
+        respons = client.chat(berichten, model=beoordelaar, temperature=0)
+        if verbruik is not None and isinstance(respons, dict) and isinstance(respons.get("usage"), dict):
+            verbruik.append(respons["usage"])
+        antwoord = antwoord_uit(respons)
         ruw.append(antwoord)
         try:
             return parse_oordeel(antwoord), ruw
@@ -266,8 +271,9 @@ def beoordeel(sessie: Session, opties: BeoordeelOpties, client, omg: Omgeving | 
     for run in te_doen:
         messages = [{"role": "system", "content": systeem},
                     {"role": "user", "content": gebruikersbericht(run.testcase, run.antwoord, verwacht)}]
+        verbruik = []
         try:
-            oordeel, ruw = vraag_oordeel(client, beoordelaar, messages)
+            oordeel, ruw = vraag_oordeel(client, beoordelaar, messages, verbruik)
         except Exception as e:  # noqa: BLE001 - per run melden en doorgaan
             res.fouten.append((run.run_id, f"{type(e).__name__}: {e}"))
             say(f"  ✗ {run.run_id}: {e}")
@@ -283,7 +289,7 @@ def beoordeel(sessie: Session, opties: BeoordeelOpties, client, omg: Omgeving | 
                         ko_code=oordeel["ko"].get("code") or "", ko_citaat=oordeel["ko"].get("citaat") or "",
                         toelichting=oordeel["toelichting"], te_verifieren=oordeel["te_verifieren"],
                         kernpunten=oordeel["kernpunten"], eindoordeel=oordeel_eind, waarschuwingen=waarschuwingen,
-                        details={"berichten": messages, "ruwe_antwoorden": ruw,
+                        details={"berichten": messages, "ruwe_antwoorden": ruw, "usage": verbruik,
                                  "tijdstip": dt.datetime.now().astimezone().isoformat(timespec="seconds")})
         b.zet_scores(oordeel["scores"])
         sessie.add(b)

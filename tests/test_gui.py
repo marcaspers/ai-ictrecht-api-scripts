@@ -56,7 +56,9 @@ def opslaan(at: AppTest, label="Definitief maken"):
 
 def test_beoordelen_toont_vraag_verwachting_en_antwoord(app_db):
     at = start()
-    assert [h.value for h in at.subheader][:3] == ["Vraag", "Verwacht antwoord", "Antwoord model"]
+    koppen = [h.value for h in at.subheader][:3]
+    assert koppen[:2] == ["Vraag", "Verwacht antwoord"]
+    assert koppen[2].startswith("Antwoord ") and koppen[2].endswith(" v1.0")
     assert any("Antwoord 1" in m.value for m in at.markdown)
     assert any(t.value.startswith("Wanneer is iets auteursrechtelijk") for t in at.text)
 
@@ -185,3 +187,11 @@ def test_wachtwoord(app_db, monkeypatch):
     assert at.error
     at.text_input[0].set_value("geheim").run()
     assert not at.exception and at.session_state.ingelogd
+
+
+def test_overzicht_tokens_per_dag(app_db):
+    llm_oordeel(app_db)
+    at = start("overzicht")
+    assert "Tokens per dag" in [h.value for h in at.subheader]
+    df = at.dataframe[1].value
+    assert df["API-runs"].sum() == 2 and df["Totaal"].sum() == 240  # 2 runs × 120; oud LLM-oordeel zonder tokens
