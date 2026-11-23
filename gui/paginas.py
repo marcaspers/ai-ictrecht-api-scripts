@@ -3,22 +3,29 @@
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import hmac
+import io
 import os
 from collections import Counter
 
 import pandas as pd
 import streamlit as st
+from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from db.models import (BLIND, DEFINITIEF, DIMENSIE_VELDEN, KLAD, KO_CODES, LLM, MENS, MODEL_STATUSSEN, OVERGENOMEN,
-                       SCORE_KEUZES, TC_STATUSSEN, TESTTYPES, Beoordeling, Model, Testcase, Testrun, nu, score_waarde,
-                       tel_tokens)
+from db.models import (BLIND, DEFINITIEF, DIMENSIE_VELDEN, DIMENSIES, KLAD, KO_CODES, LLM, MENS, MODEL_STATUSSEN,
+                       OVERGENOMEN, SCORE_KEUZES, TC_STATUSSEN, TESTTYPES, Beoordeling, Model, Testcase, Testrun, nu,
+                       score_waarde, tel_tokens)
 from db.opslag import (ALLEEN_GOEDGEKEURD, instelling, laad_koppelingen, volgende_run_id, volgende_tc_id,
                        zet_instelling)
 from db.sessie import open_sessie
 from register.eindoordeel import ONVOLDOENDE, TWIJFEL, VOLDOENDE, eindoordeel
+from register.xlsxpatch import MAX_CELTEKST
 from testrunner.beoordelen import RUBRIC_PAD, verwachtingen
 
 
@@ -463,6 +470,75 @@ RUN_KOLOMMEN = ["Verwijderd", "Run-ID", "TC-ID", "Testtype", "Model-ID", "Modelv
                 "Uitgevoerd door", "Uitvoerwijze", "Antwoord model"]
 
 
+def _cel(v):
+    """Waarde geschikt voor een Excel-cel: geen ongeldige tekens, niet langer dan de cellimiet."""
+    if isinstance(v, str):
+        v = ILLEGAL_CHARACTERS_RE.sub("", v)
+        return v[:MAX_CELTEKST - 40] + " […afgekapt]" if len(v) > MAX_CELTEKST else v
+    return v
+
+
+def testruns_excel(runs: list[Testrun], filters: dict[str, str], door: str = "") -> bytes:
+    """Excel-bestand met de (gefilterde) runs: per run de scores van jurist en LLM in aparte kolommen en het
+    volledige antwoord. Tabblad 'Filters' legt vast met welke selectie het bestand is gemaakt."""
+    koppen = ["Run-ID", "TC-ID", "Testtype", "Model-ID", "Modelversie", "API-model", "Datum", "Herhaling #",
+              "Status", "Verwijderd",
+              *(f"{d} jurist" for d in DIMENSIES), "K.O. jurist", "Eindoordeel jurist", "Beoordelaar",
+              "Status jurist", "Toelichting jurist",
+              *(f"{d} LLM" for d in DIMENSIES), "K.O. LLM", "Eindoordeel LLM", "Toelichting LLM",
+              "Tokens", "Tokens LLM", "Duur (s)", "Uitgevoerd door", "Uitvoerwijze", "Antwoord model"]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Testruns"
+    ws.append(koppen)
+    for r in runs:
+        mens, llm = r.beoordeling(MENS), r.beoordeling(LLM)
+
+        def oordeel(b: Beoordeling | None, met_beoordelaar: bool) -> list:
+            if not b:
+                return [None] * (len(DIMENSIES) + (5 if met_beoordelaar else 3))
+            ko = (b.ko_code or "J") if b.ko == "J" else b.ko
+            extra = [b.beoordelaar, b.status] if met_beoordelaar else []
+            return [*b.scores().values(), ko, b.eindoordeel, *extra, b.toelichting]
+
+        ws.append([_cel(v) for v in (
+            r.run_id, r.tc_id, r.testcase.testtype, r.model_id, r.modelversie, r.api_model, r.datum, r.herhaling,
+            status_run(r), "ja" if r.verwijderd else "", *oordeel(mens, True), *oordeel(llm, False),
+            (r.tokens or {}).get("totaal"), ((llm.tokens if llm else None) or {}).get("totaal"),
+            round(r.duur_s, 1) if r.duur_s else None, r.uitgevoerd_door, r.uitvoerwijze, r.antwoord)])
+    ws.freeze_panes = "B2"
+    ws.auto_filter.ref = ws.dimensions
+    for i, kop in enumerate(koppen, 1):
+        ws.cell(1, i).font = Font(bold=True)
+        breed = 80 if kop == "Antwoord model" else 50 if kop.startswith("Toelichting") else max(10, len(kop) + 2)
+        ws.column_dimensions[get_column_letter(i)].width = breed
+    for (cel,) in ws.iter_rows(min_row=2, min_col=koppen.index("Datum") + 1, max_col=koppen.index("Datum") + 1):
+        cel.number_format = "DD-MM-YYYY"
+
+    wf = wb.create_sheet("Filters")
+    wf.append(["Filter", "Waarde"])
+    for k, v in {**filters, "Aantal runs": len(runs),
+                 "Geëxporteerd op": dt.datetime.now().strftime("%d-%m-%Y %H:%M"),
+                 "Geëxporteerd door": door}.items():
+        wf.append([k, v])
+    wf["A1"].font = wf["B1"].font = Font(bold=True)
+    wf.column_dimensions["A"].width, wf.column_dimensions["B"].width = 20, 50
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def testruns_excel_uit_db(run_ids: list[str], filters: dict[str, str], door: str, url: str | None = None) -> bytes:
+    """Laadt de runs opnieuw in een eigen sessie: de download-callback draait pas bij de klik, in een aparte thread,
+    als de sessie van de pagina al gesloten is."""
+    with open_sessie(url) as s:
+        per_id = {r.run_id: r for r in s.scalars(
+            select(Testrun).where(Testrun.run_id.in_(run_ids))
+            .options(selectinload(Testrun.beoordelingen), selectinload(Testrun.testcase)))}
+        return testruns_excel([per_id[i] for i in run_ids if i in per_id], filters, door)
+
+
 def pagina_testruns():
     st.title("Testruns")
     with open_sessie() as s:
@@ -518,11 +594,21 @@ def pagina_testruns():
                            "Antwoord model": st.column_config.TextColumn(width="large")})
         st.caption(f"{len(runs)} run(s). Antwoord ingekort; het volledige antwoord staat bij Details en Beoordelen. "
                    "Een klad van de jurist telt nog niet mee in Overzicht, kalibratie en export.")
-        if st.button("Wijzigingen opslaan", type="primary"):
+        k1, k2, _ = st.columns([1, 1, 3])
+        if k1.button("Wijzigingen opslaan", type="primary", width="stretch"):
             n = bewaar_wijzigingen(s, {r.run_id: r for r in runs}, df, bewerkt, "Run-ID",
                                    {"Modelversie": "modelversie", "Uitgevoerd door": "uitgevoerd_door"})
             s.commit()
             st.success(f"{n} run(s) bijgewerkt")
+        filters = {"Model": model, "Versie": versie, "Status": ", ".join(statussen) or "(alle)",
+                   "Eindoordeel": oordeel, "Verwijderde runs": "meegenomen" if verwijderd else "niet meegenomen"}
+        k2.download_button(
+            "Exporteren naar Excel", on_click="ignore",
+            data=functools.partial(testruns_excel_uit_db, [r.run_id for r in runs], filters, gebruiker()),
+            file_name=f"testruns_{dt.datetime.now():%Y%m%d_%H%M}.xlsx", disabled=not runs, width="stretch",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Exporteert de runs die nu in de tabel staan (met de filters hierboven), met volledige antwoorden "
+                 "en de scores van jurist en LLM per dimensie. Niet-opgeslagen wijzigingen in de tabel gaan niet mee.")
 
         if runs:
             with st.expander("Details van een run"):

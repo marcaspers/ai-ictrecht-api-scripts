@@ -195,3 +195,25 @@ def test_overzicht_tokens_per_dag(app_db):
     assert "Tokens per dag" in [h.value for h in at.subheader]
     df = at.dataframe[1].value
     assert df["API-runs"].sum() == 2 and df["Totaal"].sum() == 240  # 2 runs × 120; oud LLM-oordeel zonder tokens
+
+
+def test_testruns_excel_export(app_db):
+    import io
+
+    from openpyxl import load_workbook
+
+    from gui.paginas import testruns_excel_uit_db
+    llm_oordeel(app_db)
+    with open_sessie(app_db) as s:
+        runs = list(s.scalars(select(Testrun).order_by(Testrun.run_id)))
+    data = testruns_excel_uit_db([runs[0].run_id], {"Model": "IE", "Status": "(alle)"}, "Tester", app_db)
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["Testruns"]
+    koppen = [c.value for c in ws[1]]
+    rijen = [dict(zip(koppen, (c.value for c in rij))) for rij in ws.iter_rows(min_row=2)]
+    assert [r["Run-ID"] for r in rijen] == ["RUN-20261116-001"]  # alleen de meegegeven (gefilterde) runs
+    assert rijen[0]["Juistheid LLM"] == 2 and rijen[0]["Eindoordeel LLM"] == "Twijfel"
+    assert rijen[0]["Juistheid jurist"] is None
+    assert rijen[0]["Antwoord model"] == runs[0].antwoord  # volledig, niet ingekort
+    filters = {r[0].value: r[1].value for r in wb["Filters"].iter_rows(min_row=2)}
+    assert filters["Model"] == "IE" and filters["Aantal runs"] == 1 and filters["Geëxporteerd door"] == "Tester"
