@@ -15,7 +15,7 @@ load_dotenv()
 
 DEFAULT_BASE_URL = "https://proxy.ai.ictrecht.nl/api"
 DEFAULT_LOG_DIR = "logs"
-DEFAULT_MODELS_FILE = "models.json"
+DEFAULT_MODELS_FILE = "data/models.json"  # lokaal, niet in git
 DEFAULT_TIMEOUT = 300  # seconden; overschrijfbaar met ICTRECHT_API_TIMEOUT
 REDACTED_FIELDS = {"password"}
 

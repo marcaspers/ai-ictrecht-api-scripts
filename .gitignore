@@ -5,8 +5,9 @@ __pycache__/
 .pytest_cache/
 output/
 logs/
-# Lokale database en import/exportbestanden
+# Lokale database, import/exportbestanden en de modellenlijst (data/models.json)
 data/
+models.json
 # Registers en andere werkmappen horen niet in git (behalve de testfixture en het lege exportsjabloon)
 *.xlsx
 ~$*

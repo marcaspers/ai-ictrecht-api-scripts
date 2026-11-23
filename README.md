@@ -37,7 +37,7 @@ docker compose run --rm play login jij@ictrecht.nl   # token ophalen met e-mail/
 ```
 
 Zonder Docker is het hetzelfde met `python play.py …` in plaats van `docker compose run --rm play …`.
-`models.json` en `logs/` worden in de container gekoppeld, dus wijzigingen komen gewoon in je projectmap.
+`data/` (met `data/models.json`) en `logs/` worden in de container gekoppeld, dus wijzigingen komen gewoon in je projectmap.
 
 ## In je eigen scripts
 
@@ -50,14 +50,16 @@ resp = client.chat([{"role": "user", "content": "Hoi"}], model="...")
 print(resp["choices"][0]["message"]["content"])
 ```
 
-## Modellen-overzicht (`models.json`)
+## Modellen-overzicht (`data/models.json`)
 
-Iedere `models`-call werkt `models.json` bij: een lijst van alle modellen met een vast
+Iedere `models`-call werkt `data/models.json` bij: een lijst van alle modellen met een vast
 nummer (`nr`, vanaf 0), het `id` en de naam. Dat nummer kun je overal gebruiken waar een
 model gevraagd wordt (`-m 3`, of `client.chat(..., model=3)`).
 
 - Nummers blijven stabiel: nieuwe modellen krijgen het volgende vrije nummer.
 - Modellen die uit de API-lijst verdwijnen blijven staan met `"available": false`.
+- Het bestand is lokaal en staat niet in git; de nummers gelden dus per computer. Ontbreekt het, dan wordt
+  het bij de eerstvolgende `models`-call (of `-m <nummer>`) opnieuw opgebouwd.
 - Ander pad: `ICTRECHT_API_MODELS_FILE=pad/naar/models.json`; uitzetten met een lege waarde.
 
 ## Logging
@@ -106,10 +108,9 @@ Welke mappen de container ziet:
 
 | Op je computer | In de container | Waarvoor |
 |---|---|---|
-| `./data` | `/app/data` | Excel-bestanden voor import, exports, back-ups |
+| `./data` | `/app/data` | Excel-bestanden voor import, exports, back-ups, `models.json` (modellenlijst) |
 | `./output` | `/app/output` | CSV van kalibratie |
 | `./logs` | `/app/logs` | API-log |
-| `./models.json` | `/app/models.json` | modellenlijst |
 
 Paden in commando's zijn relatief aan `/app`. Een register importeren doe je dus door het eerst in `./data`
 te zetten en dan `data/<bestand>.xlsx` mee te geven. Bestanden buiten deze mappen ziet de container niet.
