@@ -21,7 +21,6 @@ x-app: &app
     - ./data:/app/data
     - ./output:/app/output
     - ./logs:/app/logs
-    - ./models.json:/app/models.json
   depends_on:
     db:
       condition: service_healthy

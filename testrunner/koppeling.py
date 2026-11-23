@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 OPMERKING_RE = re.compile(r"OpenWebUI-id:\s*(\S+)")
-STANDAARD_MODELLENBESTAND = "models.json"
+STANDAARD_MODELLENBESTAND = "data/models.json"
 
 
 class KoppelingFout(RuntimeError):
